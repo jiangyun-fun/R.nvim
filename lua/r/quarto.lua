@@ -384,7 +384,6 @@ end
 ---@param chunks table The code chunks.
 ---@return table
 M.codelines_from_chunks = function(chunks)
-    local config = require("r.config").get_config()
     local utils = require("r.utils")
     local codelines = {}
 
@@ -392,13 +391,11 @@ M.codelines_from_chunks = function(chunks)
         local lang = chunk:get_lang()
         local content = chunk:get_content()
 
-        -- Dedent Python code
-        if M.is_python(lang) then content = utils.dedent(content) end
-
         if M.is_python(lang) then
+            -- Dedent Python code
+            content = utils.dedent(content)
             content = 'reticulate::py_run_string(r"---(' .. content .. ')---")'
         elseif M.is_bash(lang) then
-            local lines = vim.fn.split(content, "\n")
             content = 'system2("bash", c("-c", shQuote(r"---(' .. content .. ')---")))'
         end
 

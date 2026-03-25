@@ -377,7 +377,6 @@ M.source_lines = function(lines, what)
                 rcmd = 'reticulate::py_run_file("' .. config.source_file .. '")'
             elseif what == "BashCode" then
                 rcmd = 'system2("bash", c("' .. config.source_file .. '"))'
-                
             else
                 rcmd = "Rnvim." .. what .. "(" .. sargs .. ")"
             end
@@ -757,7 +756,6 @@ M.line = function(m)
             local lines
             lines, lnum = get_python_code_to_send(chunk, line, lnum)
 
-            -- Dedent Python code (like knitr and reticulate do)
             local code = utils.dedent(table.concat(lines, "\n"))
 
             code = 'reticulate::py_run_string(r"---(' .. code .. ')---")'

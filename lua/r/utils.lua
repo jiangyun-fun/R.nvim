@@ -428,44 +428,25 @@ M.get_mapped_key = function(name)
     return nil
 end
 
---- Dedent multi-line text by removing common leading whitespace
---- Similar to Python's textwrap.dedent() or knitr's dedent behavior
----@param text string The text to dedent
----@return string The dedented text
 M.dedent = function(text)
-    -- Split on literal newline, not Lua pattern
-    local lines = {}
-    for line in (text .. "\n"):gmatch("(.-)\n") do
-        table.insert(lines, line)
-    end
-    -- Remove trailing empty string if text doesn't end with \n
-    if text:sub(-1) ~= "\n" and #lines > 1 and lines[#lines] == "" then
-        table.remove(lines)
-    end
+    local lines = vim.split(text, "\n", { plain = true })
 
     -- Find minimum leading whitespace among non-empty lines
     local min_indent = math.huge
     for _, line in ipairs(lines) do
-        if line:match("%S") then -- Non-empty line
-            local indent, _ = line:match("^(%s*)(.+)")
-            if #indent < min_indent then min_indent = #indent end
+        if line:match("%S") then
+            min_indent = math.min(min_indent, #(line:match("^(%s*)")))
         end
     end
 
-    -- If no non-empty lines or no indentation, return original
-    if min_indent == math.huge or min_indent == 0 then return text end
+    if min_indent == 0 or min_indent == math.huge then return text end
 
     -- Remove min_indent leading spaces from each line
-    local dedented_lines = {}
-    for _, line in ipairs(lines) do
-        if #line >= min_indent then
-            table.insert(dedented_lines, line:sub(min_indent + 1))
-        else
-            table.insert(dedented_lines, line)
-        end
+    for i, line in ipairs(lines) do
+        lines[i] = line:sub(min_indent + 1)
     end
 
-    return table.concat(dedented_lines, "\n")
+    return table.concat(lines, "\n")
 end
 
 return M
