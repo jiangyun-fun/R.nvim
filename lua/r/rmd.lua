@@ -51,7 +51,7 @@ M.write_chunk = function()
     end
 end
 
---- Sends the current R or Python code chunk to the R console for evaluation.
+--- Sends the current R, Python or Bash code chunk to the R console for evaluation.
 ---@param m boolean If true, the cursor will move to the next code chunk after evaluation.
 M.send_current_chunk = function(m)
     local bufnr = vim.api.nvim_get_current_buf()
@@ -62,7 +62,7 @@ M.send_current_chunk = function(m)
 
     if #chunks == 0 then
         inform(
-            "No evaluable R or Python code chunk found at the current cursor position."
+            "No evaluable R, Python or Bash code chunk found at the current cursor position."
         )
 
         return
@@ -75,9 +75,9 @@ M.send_current_chunk = function(m)
     if m == true then M.next_chunk() end
 end
 
---- Navigates to the previous R or Python code chunk in the document.
+--- Navigates to the previous R, Python or Bash code chunk in the document.
 -- This function searches backwards from the current cursor position for the start of
--- any R or Python code chunk.
+-- any R, Python or Bash code chunk.
 ---@return boolean
 local go_to_previous = function()
     local curline = vim.api.nvim_win_get_cursor(0)[1]
@@ -106,8 +106,8 @@ M.previous_chunk = function()
     end
 end
 
---- Navigates to the next R or Python code chunk in the document.
--- This function searches forward from the current cursor position for the start of any R or Python code chunk.
+--- Navigates to the next R, Python or Bash code chunk in the document.
+-- This function searches forward from the current cursor position for the start of any R, Python or Bash code chunk.
 ---@return boolean
 local go_to_next = function()
     local chunks = quarto.get_chunks_below_cursor(vim.api.nvim_get_current_buf())

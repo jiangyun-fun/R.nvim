@@ -289,7 +289,9 @@ end
 
 --- This function gets the supported languages for code execution
 ---@return string[]
-M.get_supported_chunk_langs = function() return { "r", "webr", "python", "pyodide" } end
+M.get_supported_chunk_langs = function()
+    return { "r", "webr", "python", "pyodide", "bash" }
+end
 
 --- This function filters the code chunks based on the supported languages
 ---@param chunks table The code chunks.
@@ -315,7 +317,9 @@ end
 --- This function checks if a language is supported
 ---@param lang string
 ---@return boolean
-M.is_supported_lang = function(lang) return M.is_r(lang) or M.is_python(lang) end
+M.is_supported_lang = function(lang)
+    return M.is_r(lang) or M.is_python(lang) or M.is_bash(lang)
+end
 
 --- This function checks if a language is either "r" or "webr"
 ---@param lang string
@@ -331,6 +335,14 @@ end
 M.is_python = function(lang)
     local python_langs = { python = true, pyodide = true }
     return python_langs[lang] or false
+end
+
+--- This function checks if a language is "bash"
+---@param lang string
+---@return boolean
+M.is_bash = function(lang)
+    local bash_langs = { bash = true }
+    return bash_langs[lang] or false
 end
 
 --- This function filters the code chunks based on the eval parameter. If the eval parameter is not found it is assumed to be true
@@ -367,20 +379,30 @@ end
 --- Formats the code chunks into a list of code lines that can be executed in
 --- R. The code lines are formatted based on the language of the code chunk. If
 --- the language is python, the code line is wrapped in
---- reticulate::py_run_string. If the language is R, the code line is returned
---- as is.
+--- reticulate::py_run_string. If the language is bash, the code is wrapped in
+--- system2(). If the language is R, the code line is returned as is.
 ---@param chunks table The code chunks.
 ---@return table
 M.codelines_from_chunks = function(chunks)
+    local config = require("r.config").get_config()
+    local utils = require("r.utils")
     local codelines = {}
 
     for _, chunk in ipairs(chunks) do
         local lang = chunk:get_lang()
         local content = chunk:get_content()
+
+        -- Dedent Python code
+        if M.is_python(lang) then content = utils.dedent(content) end
+
         if M.is_python(lang) then
             content = 'reticulate::py_run_string(r"---(' .. content .. ')---")'
+        elseif M.is_bash(lang) then
+            local lines = vim.fn.split(content, "\n")
+            content = 'system2("bash", c("-c", shQuote(r"---(' .. content .. ')---")))'
         end
-        if M.is_python(lang) or M.is_r(lang) then
+
+        if M.is_python(lang) or M.is_r(lang) or M.is_bash(lang) then
             local lines = vim.fn.split(content, "\n")
             for _, v in pairs(lines) do
                 table.insert(codelines, v)

@@ -12,7 +12,13 @@ x <- 1L:10L
 Some text here.
 
 ```{python}
-# | label: python_chunk
+#| label: python_chunk
 def add(a, b):
     return a + b
+```
+
+```{bash}
+#| label: bash_chunk
+echo "Hello from bash!"
+ls -la
 ```

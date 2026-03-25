@@ -30,6 +30,8 @@ describe(
             { { 8, 0 }, "r", "detect r code" },
             { { 14, 0 }, "python", "detect python code" },
             { { 15, 0 }, "python", "detect python code" },
+            { { 20, 0 }, "bash", "detect bash code" },
+            { { 21, 0 }, "bash", "detect bash code" },
             -- { { 2, 1 }, "yaml", "detect yaml code" },
             -- { { 12, 1 }, "markdown_inline", "detect markdown_inline code" },
         }

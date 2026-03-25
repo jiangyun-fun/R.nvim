@@ -86,7 +86,7 @@ end
 ---@param txt string The text for the line the cursor is currently on
 ---@param row number The row the cursor is currently on
 ---@return table, number
-local function get_code_to_send(txt, row)
+local function get_r_code_to_send(txt, row)
     if not config.parenblock then return {}, row end
 
     local last_line = vim.api.nvim_buf_line_count(0)
@@ -137,6 +137,157 @@ local function get_code_to_send(txt, row)
             table.insert(lines, line_txt)
         end
         row = end_row
+    end
+
+    return lines, row
+end
+
+--- Get the full Python expression the cursor is currently on
+--- Uses the same approach as R: walk up until parent is module or block
+---@param chunk table The current chunk object
+---@param txt string The text for the line the cursor is currently on
+---@param row number The row the cursor is currently on
+---@return table, number
+local function get_python_code_to_send(chunk, txt, row)
+    local last_line = vim.api.nvim_buf_line_count(0)
+    local lines = {}
+    local send_insignificant_lines = false
+
+    -- Find the first non-blank row/column after the cursor
+    while is_insignificant(txt) do
+        if is_comment(txt) then send_insignificant_lines = true end
+        if send_insignificant_lines then table.insert(lines, txt) end
+        if row == last_line then return lines, row end
+        row = row + 1
+        txt = vim.fn.getline(row)
+    end
+
+    -- Get chunk content and parse it as Python
+    local chunk_content = chunk:get_content()
+    local chunk_start, _ = chunk:get_range()
+    local content_start = chunk_start + 1
+    local relative_row = row - content_start
+    local col = txt:find("%S") or 1
+
+    -- Create a temporary buffer for parsing
+    local tmp_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(tmp_buf, 0, 0, true, vim.fn.split(chunk_content, "\n"))
+
+    -- Parse with TreeSitter
+    local ok, parser = pcall(vim.treesitter.get_parser, tmp_buf, "python")
+    if not ok or not parser then
+        vim.api.nvim_buf_delete(tmp_buf, { force = true })
+        table.insert(lines, txt)
+        return lines, row
+    end
+
+    local root = parser:parse()[1]:root()
+    local node =
+        root:named_descendant_for_range(relative_row, col - 1, relative_row, col - 1)
+
+    -- Walk up until parent is module or block (same approach as R's braced_expression)
+    while node do
+        local parent = node:parent()
+        if parent and (parent:type() == "module" or parent:type() == "block") then
+            break
+        end
+        node = parent
+    end
+
+    vim.api.nvim_buf_delete(tmp_buf, { force = true })
+
+    if node then
+        local start_row, _, end_row, _ = node:range()
+        local abs_start = content_start + start_row
+        local abs_end = content_start + end_row
+        for i = abs_start, abs_end do
+            table.insert(lines, vim.fn.getline(i))
+        end
+        row = abs_end
+    else
+        table.insert(lines, txt)
+    end
+
+    return lines, row
+end
+
+--- Get the full Bash expression the cursor is currently on
+--- Uses the same approach as R: walk up until parent is program or a block type
+---@param chunk table The current chunk object
+---@param txt string The text for the line the cursor is currently on
+---@param row number The row the cursor is currently on
+---@return table, number
+local function get_bash_code_to_send(chunk, txt, row)
+    local last_line = vim.api.nvim_buf_line_count(0)
+    local lines = {}
+    local send_insignificant_lines = false
+
+    -- Find the first non-blank row/column after the cursor
+    while is_insignificant(txt) do
+        if is_comment(txt) then send_insignificant_lines = true end
+        if send_insignificant_lines then table.insert(lines, txt) end
+        if row == last_line then return lines, row end
+        row = row + 1
+        txt = vim.fn.getline(row)
+    end
+
+    -- Get chunk content and parse it as Bash
+    local chunk_content = chunk:get_content()
+    local chunk_start, _ = chunk:get_range()
+    local content_start = chunk_start + 1
+    local relative_row = row - content_start
+    local col = txt:find("%S") or 1
+
+    -- Create a temporary buffer for parsing
+    local tmp_buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(tmp_buf, 0, 0, true, vim.fn.split(chunk_content, "\n"))
+
+    -- Parse with TreeSitter
+    local ok, parser = pcall(vim.treesitter.get_parser, tmp_buf, "bash")
+    if not ok or not parser then
+        vim.api.nvim_buf_delete(tmp_buf, { force = true })
+        table.insert(lines, txt)
+        return lines, row
+    end
+
+    local root = parser:parse()[1]:root()
+    local node =
+        root:named_descendant_for_range(relative_row, col - 1, relative_row, col - 1)
+
+    -- Block types in Bash that act like R's braced_expression
+    local bash_block_types = {
+        "compound_statement", -- { ... }
+        "subshell", -- ( ... )
+        "do_group", -- do ... done
+    }
+
+    -- Walk up until parent is program or a block type (same approach as R)
+    while node do
+        local parent = node:parent()
+        if
+            parent
+            and (
+                parent:type() == "program"
+                or vim.tbl_contains(bash_block_types, parent:type())
+            )
+        then
+            break
+        end
+        node = parent
+    end
+
+    vim.api.nvim_buf_delete(tmp_buf, { force = true })
+
+    if node then
+        local start_row, _, end_row, _ = node:range()
+        local abs_start = content_start + start_row
+        local abs_end = content_start + end_row
+        for i = abs_start, abs_end do
+            table.insert(lines, vim.fn.getline(i))
+        end
+        row = abs_end
+    else
+        table.insert(lines, txt)
     end
 
     return lines, row
@@ -212,7 +363,11 @@ M.source_lines = function(lines, what)
     if #lines < config.max_paste_lines then
         rcmd = table.concat(lines, "\n")
         if what and what == "PythonCode" then
+            -- Dedent Python code
+            rcmd = utils.dedent(rcmd)
             rcmd = 'reticulate::py_run_string(r"---(' .. rcmd .. ')---")'
+        elseif what and what == "BashCode" then
+            rcmd = 'system2("bash", c("-c", shQuote(r"---(' .. rcmd .. ')---")))'
         end
     else
         vim.fn.writefile(lines, config.source_write)
@@ -220,6 +375,8 @@ M.source_lines = function(lines, what)
         if what then
             if what == "PythonCode" then
                 rcmd = 'reticulate::py_run_file("' .. config.source_read .. '")'
+            elseif what == "BashCode" then
+                rcmd = 'system2("bash", c("' .. config.source_read .. '"))'
             else
                 rcmd = "Rnvim." .. what .. "(" .. sargs .. ")"
             end
@@ -483,7 +640,7 @@ M.selection = function(m)
         and not quarto.is_supported_lang(lang)
         and not vim.api.nvim_get_current_line():find("`r ")
     then
-        inform("Not inside R or Python code chunk.")
+        inform("Not inside R, Python or Bash code chunk.")
         return
     end
 
@@ -537,6 +694,8 @@ M.selection = function(m)
     local ok
     if lang == "python" then
         ok = M.source_lines(lines, "PythonCode")
+    elseif lang == "bash" then
+        ok = M.source_lines(lines, "BashCode")
     else
         ok = M.source_lines(lines, "selection")
     end
@@ -593,13 +752,42 @@ M.line = function(m)
 
     if vim.tbl_contains({ "rnoweb", "markdown", "rmd", "quarto" }, vim.bo.filetype) then
         if quarto.is_python(lang) then
-            line = 'reticulate::py_run_string(r"---(' .. line .. ')---")'
-            ok = M.cmd(line)
-            if ok and m == "move" then cursor.move_next_line() end
+            -- Use TreeSitter to get full Python expression
+            local lines
+            lines, lnum = get_python_code_to_send(chunk, line, lnum)
+
+            -- Dedent Python code (like knitr and reticulate do)
+            local code = utils.dedent(table.concat(lines, "\n"))
+
+            code = 'reticulate::py_run_string(r"---(' .. code .. ')---")'
+            ok = M.cmd(code)
+            if ok and m == "move" then
+                -- Set cursor to end of sent code, then move_next_line will increment to next line
+                local last_line = vim.api.nvim_buf_line_count(0)
+                vim.api.nvim_win_set_cursor(0, { math.min(lnum, last_line), 0 })
+                cursor.move_next_line()
+            end
+            return
+        end
+        if quarto.is_bash(lang) then
+            -- Use TreeSitter to get full Bash expression
+            local lines
+            lines, lnum = get_bash_code_to_send(chunk, line, lnum)
+
+            local code = table.concat(lines, "\n")
+
+            code = 'system2("bash", c("-c", shQuote(r"---(' .. code .. ')---")))'
+            ok = M.cmd(code)
+            if ok and m == "move" then
+                -- Set cursor to end of sent code, then move_next_line will increment to next line
+                local last_line = vim.api.nvim_buf_line_count(0)
+                vim.api.nvim_win_set_cursor(0, { math.min(lnum, last_line), 0 })
+                cursor.move_next_line()
+            end
             return
         end
         if not quarto.is_r(lang) then
-            inform("Not inside R or Python code chunk.")
+            inform("Not inside R, Python or Bash code chunk.")
             return
         end
     end
@@ -611,7 +799,7 @@ M.line = function(m)
     end
 
     local lines
-    lines, lnum = get_code_to_send(line, lnum)
+    lines, lnum = get_r_code_to_send(line, lnum)
 
     if #lines > 1 then
         ok = M.source_lines(lines, nil)
