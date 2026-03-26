@@ -2,7 +2,7 @@
 
 Authors: R.nvim team (see: https://github.com/R-nvim)
 
-Version: 0.99.2
+Version: 0.99.3
 For Neovim >= 0.11.4
 
  1. Overview                                    |R.nvim-overview|
@@ -41,13 +41,15 @@ Git pull requests are welcome.
       - Send commands with the object under cursor as argument: help, args,
         plot, print, str, summary, example, names.
       - Send to R the Sweave, knit and LaTeX commands.
-  * Built-in language server with hover, signature and completion
-    capabilities. The completion works for:
+  * Built-in language server with hover, signature, completion, and
+    document highlight capabilities. The completion works for:
       - R objects (.GlobalEnv and loaded packages).
       - function arguments.
       - knitr chunk options.
       - Quarto cell options.
       - Quarto YAML frontmatter and project configuration (via yamlls).
+    Document highlight marks all references to the symbol under the cursor,
+    distinguishing read and write (assignment) occurrences.
   * Ability to see R's documentation in an editor buffer:
       - Automatic formatting of the text to fit the panel width.
       - Send code and commands to R (useful to run examples).
@@ -338,7 +340,8 @@ marks are not visible, but there are plugins that highlight them.
 Sending a selection of lines is actually a special case of sending a marked
 block with the marks being `'<` and `'>`. That is the reason why the command
 to send selection also works in Normal mode: it will send the lines that
-were selected for the last time.
+were selected for the last time. While the cursor is in an ROxygen line,
+the `#'` prefix will be removed before the selected lines are sent to R.
 
 You can also use the command `:RSend` to type and, then, send a line of code
 to R.
@@ -503,6 +506,35 @@ Note: Due to the extensive number of possible Quarto configuration options,
 the schemas do not cover all possibilities. We aim to expand coverage in
 future updates and welcome user requests for specific missing options.
 
+Note: This feature requires Neovim's built-in LSP client and will only work
+if `vim.lsp.config` is available (Neovim 0.11+).
+
+
+------------------------------------------------------------------------------
+4.3.2. Document highlight                               *R.nvim-doc-highlight*
+
+R.nvim supports the `textDocument/documentHighlight` LSP request. When
+triggered, it highlights all references to the symbol under the cursor in the
+current buffer. The feature is scope-aware: it only highlights occurrences
+that refer to the same binding, so symbols with the same name in different
+scopes are not confused.
+
+Occurrences are classified into two kinds:
+
+  - Read  — symbol is read                 → `LspReferenceRead`
+  - Write — symbol is the assignment target → `LspReferenceWrite`
+
+Neovim applies the built-in `LspReferenceText`, `LspReferenceRead`, and
+`LspReferenceWrite` highlight groups. You can customise them in your
+`init.lua`. For example:
+>lua
+   vim.api.nvim_set_hl(0, "LspReferenceText",  { bg = "#3F5865", fg = "white" })
+   vim.api.nvim_set_hl(0, "LspReferenceRead",  { link = "LspReferenceText" })
+   vim.api.nvim_set_hl(0, "LspReferenceWrite", { bg = "#3a5a7a", fg = "white" })
+<
+Whether highlights are triggered automatically on `CursorHold` or manually
+via a keymap depends entirely on your Neovim configuration, R.nvim only
+provides the server-side response.
 Note: This feature requires Neovim's built-in LSP client and will only work
 if `vim.lsp.config` is available (Neovim 0.11+).
 
@@ -674,12 +706,21 @@ defined by your colorscheme.
 
 
 ------------------------------------------------------------------------------
-4.7 roxygen2 support                                         *R.nvim-roxygen2*
+4.7 ROxygen2 support                                         *R.nvim-roxygen2*
 
-R.nvim supports the insertion of roxygen2 skeletons in R scripts. To insert a
-new roxygen2 block, you can use the `:ROxygenize` command while the cursor is
-inside a function definition. If a block of roxygen2 is already present, no
+R.nvim supports the insertion of ROxygen2 skeletons in R scripts. To insert a
+new ROxygen2 block, you can use the `:ROxygenize` command while the cursor is
+inside a function definition. If a block of ROxygen2 is already present, no
 modification will be made.
+
+Set the value of `roxygen_hl` to `true` to enable highlighting of ROxygen
+comments and ROxygen-specific LSP completion behavior (tag completion, Rhelp
+keyword completion, and R code completion inside `@examples`). The
+highlighting is updated when leaving Insert mode.
+
+Code from ROxygen examples can be sent only as a selection of lines because
+the other sending commands rely on tree-sitter-r, which currently doesn't
+support ROxygen.
 
 
 ==============================================================================
@@ -846,6 +887,24 @@ Windows.
 ==============================================================================
 6. Options                                                    *R.nvim-options*
 
+As usual with Lua plugins, the options might be set in your Neovim `init.lua`
+or other Lua script sourced during Neovim startup. Example:
+>lua
+   require("r").setup({
+     -- your options here
+   })
+<
+You can also set directory-specific options in an `rnvim_config.lua` script,
+returning a Lua table which will override the `init.lua` options. The
+`rnvim_config.lua` script will be sourced when the first R file (`.R`, `.Rmd`,
+`.qmd`, `.Rnw` or `.Rd`) from its directory is read. Example of
+`rnvim_config.lua`:
+>lua
+   return {
+     objbr_place = "console,right",
+     rconsole_width = 100,
+   }
+<
 The complete list of options and their defined values can be seen with the
 command:
 >vim
@@ -917,7 +976,8 @@ You may close the window opened by `:RConfigShow` by simply pressing `q`.
 |disable_cmds|        List of commands to be disabled
 |tmpdir|              Where temporary files are created
 |compldir|            Where lists for auto completion are stored
-|remote_compldir|     Mount point of remote cache directory
+|remote_compl_dir|    Mount point of remote cache directory
+|remote_R_host|       Address of remote R host
 |view_df|             Options for visualizing a data.frame or matrix
 |R.nvim-SyncTeX|      Options for SyncTeX
 |debug|               Support for debugging functions
@@ -1326,7 +1386,7 @@ object browser to toggle between the two view (i.e., `.Globalenv` and `Libraries
             return
           end
 
-          local temp_file = config.localtmpdir .. '/function_def_' .. vim.env.RNVIM_ID .. '.R'
+          local temp_file = config.tmpdir .. '/function_def_' .. vim.env.RNVIM_ID .. '.R'
 
           -- Send R command to write the function definition to a temp file
           local cmd = string.format('writeLines(deparse(%s), "%s")', object_name, temp_file)
@@ -1461,19 +1521,33 @@ of the R's workspace (`.GlobalEnv`), including column names of data.frames.
 Note: If you are using the `languageserver` package, you should disable in
 your `~/.Rprofile` the features that overlap with R.nvim's ones:
 >r
-   options(languageserver.server_capabilities =
-               list(hoverProvider = FALSE,
-	            signatureHelpProvider = FALSE,
-	            completionProvider = FALSE,
-                    completionItemResolve = FALSE))
+    options(
+        languageserver.server_capabilities = list(
+            hoverProvider = FALSE,
+            signatureHelpProvider = FALSE,
+            completionProvider = FALSE,
+            completionItemResolve = FALSE,
+            definitionProvider = FALSE,
+            referencesProvider = FALSE,
+            implementationProvider = FALSE,
+            documentHighlightProvider = FALSE,
+            documentSymbolProvider = FALSE
+        )
+    )
 <
 Alternatively, you can disable or change R.nvim's built-in language server
 features in your R.nvim config. Below are the default values:
 >lua
  r_ls = {
-    completion = true, -- enable the completion provider
-    hover = true,      -- enable the hover provider
-    signature = true,  -- enable the signature help provider
+    completion = true,          -- enable the completion provider
+    hover = true,               -- enable the hover provider
+    signature = true,           -- enable the signature help provider
+    implementation = true,      -- enable the implementation provider
+    definition = true,          -- enable the definition provider
+    use_git_files = true,       -- use git to find R files, skipping gitignored files
+    references = true,          -- enable the references provider
+    document_highlight = true,  -- enable the document highlight provider
+    document_symbol = true,     -- enable the document symbol provider
     doc_width = 0,
     fun_data_1 = { "select", "rename", "mutate", "filter" },
     fun_data_2 = { ggplot = { "aes" }, with = { "*" } },
@@ -1482,13 +1556,34 @@ features in your R.nvim config. Below are the default values:
 
  }
 <
-Meaning of optons:
+Meaning of options:
 
   - `completion`: Enable the completion provider
 
   - `hover`: Enable the hover provider
 
   - `signature`: Enable the signature help provider
+
+  - `implementation`: Enable the implementation provider
+  - `definition`: Enable the definition provider
+
+  - `use_git_files`: Use `git ls-files` to find R files when indexing the
+    workspace, skipping files ignored by `.gitignore`. This dramatically
+    improves performance in large git repositories. Falls back to recursive
+    directory scan if git is unavailable. Default: `true`.
+
+  - `references`: Enable the references provider
+
+  - `document_highlight`: Enable the document highlight provider (see
+    |R.nvim-doc-highlight|)
+
+Note: The definition and references providers also recognize symbols defined
+in `{targets}` pipelines. Target-defining calls (e.g., `tar_target()`,
+`tar_file()`) where the first argument is an unquoted identifier are indexed
+as symbol definitions. Consumer calls such as `tar_read()` and `tar_load()`
+are treated as references, not definitions. This means you can use
+goto-definition and find-references to navigate between targets in your
+pipeline.
 
   - `doc_width`: The expected maximum width of the floating documentation
     window. The default value will be between 30 and 80 columns, depending
@@ -2104,10 +2199,71 @@ want to know what they are, while editing an R file, do in Normal mode:
 <
 
 ------------------------------------------------------------------------------
-6.31. Options for accessing Remote R from local Neovim        *remote_compldir*
+6.31. Options for accessing Remote R from local Neovim
+							    *remote_compl_dir*
+							       *remote_R_host*
 
-See https://github.com/R-nvim/R.nvim/wiki/Remote-access
+If you want to run R on a remote machine from a local Neovim, you have to
+install the following tools on the local machine:
 
+  - `sshfs` (used to mount the remote cache directory).
+  - `ssh` (used to run R).
+  - `make` and a C compiler (required to compile rnvimserver).
+  - `tar` (used to build the `nvimcom` package).
+
+Note: You don't need R installed on the local machine or Neovim installed on
+the remote machine.
+
+Then, you have to set up the remote machine to accept `ssh` login from the
+local machine without a password (search the command `ssh-copy-id` over the
+Internet to discover how to do it). Then you have to set three options in your
+`R.nvim` config:
+
+   `remote_compl_dir`: The absolute path to the remote cache dir to be used by
+   R to save files for R.nvim (not required if the local and the remote
+   machines have the same operating system and your login name is the same in
+   both).
+
+   `remote_R_host`: The IP address, hostname, or alias of the remote machine
+   where R is installed. This is the string that you use when connecting to
+   the remote machine through `ssh`, for example, `login@192.168.1.107`, or
+   `login@hostname`. If your login name is the same on both the local and the
+   remote machine, it can be just the hostname or IP address.
+
+Example:
+>lua
+   {
+     remote_compl_dir = "/home/username/.cache/R.nvim",
+     remote_R_host = "192.168.1.108",
+   }
+<
+Example using an environment variable:
+>lua
+   {
+     remote_R_host = vim.env.PROJ_XYZ_HOST and vim.env.PROJ_XYZ_HOST or "",
+   }
+<
+Start Neovim and start R. Nvimcom should be automatically installed on the
+remote machine.
+
+Notes:
+
+The firewall on your local machine may block the TCP connection between R
+(running on the remote machine) and `rnvimserver` (running on the local
+machine). You can edit your `~/.Rprofile` on the remote machine to know what
+port R is trying to access:
+>r
+   options(nvimcom.verbose = 2)
+<
+If R is installed in a directory that is not in the PATH environment variable
+of your SSH session, you can set the absolute path of `R_app` and `R_cmd`.
+Example:
+>lua
+   {
+     R_cmd = "/home/yourlogin/R-4.5.2/bin/R",
+     R_app = "/home/yourlogin/R-4.5.2/bin/R",
+   }
+<
 
 ------------------------------------------------------------------------------
 6.32. View a data.frame or matrix                                    *view_df*

@@ -15,7 +15,8 @@ local uv = vim.uv
 ---Get the directory where R should start
 ---@return string | nil
 local get_R_start_dir = function()
-    if not config.remote_compldir == "" then return nil end
+    -- `rsd` will not be a real directory if editing a file on the internet
+    -- with netrw plugin
     local rsd
     if config.setwd == "file" then
         rsd = M.get_buf_dir()
@@ -40,11 +41,11 @@ start_R2 = function()
         end)
     end
 
-    vim.fn.writefile({}, config.localtmpdir .. "/globenv_" .. vim.env.RNVIM_ID)
-    vim.fn.writefile({}, config.localtmpdir .. "/liblist_" .. vim.env.RNVIM_ID)
+    vim.fn.writefile({}, config.tmpdir .. "/globenv_" .. vim.env.RNVIM_ID)
+    vim.fn.writefile({}, config.tmpdir .. "/liblist_" .. vim.env.RNVIM_ID)
 
-    edit.add_for_deletion(config.localtmpdir .. "/globenv_" .. vim.env.RNVIM_ID)
-    edit.add_for_deletion(config.localtmpdir .. "/liblist_" .. vim.env.RNVIM_ID)
+    edit.add_for_deletion(config.tmpdir .. "/globenv_" .. vim.env.RNVIM_ID)
+    edit.add_for_deletion(config.tmpdir .. "/liblist_" .. vim.env.RNVIM_ID)
 
     if vim.o.encoding == "utf-8" then
         edit.add_for_deletion(config.tmpdir .. "/start_options_utf8.R")
@@ -65,11 +66,28 @@ start_R2 = function()
 
     local start_options = {
         'Sys.setenv(R_DEFAULT_PACKAGES = "' .. rdp:gsub(",nvimcom", "") .. '")',
+        'Sys.setenv(RNVIM_ID= "' .. vim.env.RNVIM_ID .. '")',
+        'Sys.setenv(RNVIM_SECRET = "' .. vim.env.RNVIM_SECRET .. '")',
+        'Sys.setenv(RNVIM_PORT = "' .. vim.env.RNVIM_PORT .. '")',
         "options(nvimcom.max_depth = " .. tostring(config.compl_data.max_depth) .. ")",
         "options(nvimcom.max_size = " .. tostring(config.compl_data.max_size) .. ")",
         "options(nvimcom.max_time = " .. tostring(config.compl_data.max_time) .. ")",
         'options(nvimcom.set_params = "' .. config.set_params .. '")',
     }
+    local cmpd
+    if config.remote_R_host == "" then
+        cmpd = config.compldir:gsub("\\", "\\\\"):gsub('"', '\\"')
+        local rsd = get_R_start_dir()
+        if rsd then
+            if vim.fn.isdirectory(rsd) == 1 then
+                table.insert(start_options, 'setwd("' .. rsd .. '")')
+            end
+        end
+    else
+        cmpd = config.remote_compl_dir:gsub("\\", "\\\\"):gsub('"', '\\"')
+        table.insert(start_options, 'Sys.setenv(RNVIM_REMOTE_R = "TRUE")')
+    end
+    table.insert(start_options, 'Sys.setenv(RNVIM_COMPLDIR = "' .. cmpd .. '")')
     if config.debug then
         table.insert(start_options, "options(nvimcom.debug_r = TRUE)")
     else
@@ -109,17 +127,8 @@ start_R2 = function()
     table.insert(start_options, 'options(nvimcom.delim = "' .. sep .. '")')
     table.insert(
         start_options,
-        'options(nvimcom.source.path = "' .. config.source_read .. '")'
+        'options(nvimcom.source.path = "' .. config.source_file .. '")'
     )
-
-    local rsd = get_R_start_dir()
-    if rsd then
-        -- `rwd` will not be a real directory if editing a file on the internet
-        -- with netrw plugin
-        if vim.fn.isdirectory(rsd) == 1 then
-            table.insert(start_options, 'setwd("' .. rsd .. '")')
-        end
-    end
 
     if vim.o.encoding == "utf-8" then
         vim.fn.writefile(start_options, config.tmpdir .. "/start_options_utf8.R")
@@ -329,7 +338,7 @@ end
 
 M.clear_R_info = function()
     vim.fn.delete(config.tmpdir .. "/globenv_" .. vim.fn.string(vim.env.RNVIM_ID))
-    vim.fn.delete(config.localtmpdir .. "/liblist_" .. vim.fn.string(vim.env.RNVIM_ID))
+    vim.fn.delete(config.tmpdir .. "/liblist_" .. vim.fn.string(vim.env.RNVIM_ID))
     R_pid = 0
     if config.external_term == "" then require("r.term.builtin").close_term() end
     if vim.g.R_Nvim_status > 3 then
@@ -427,19 +436,42 @@ end
 ---@param type string
 M.insert = function(cmd, type)
     if vim.g.R_Nvim_status < 7 then return end
+    cmd = cmd:gsub("\\", "\020")
     cmd = cmd:gsub("'", "\018")
     cmd = cmd:gsub('"', "\019")
     M.send_to_nvimcom("E", "nvimcom:::nvim_insert(" .. cmd .. ", '" .. type .. "')")
 end
 
 M.insert_commented = function()
-    local lin = vim.api.nvim_get_current_line()
-    local cleanl = lin:gsub('".-"', "")
-    if cleanl:find(";") then
+    local bufnr = require("r.buffer").create_r_buffer()
+    local code, end_row
+
+    if bufnr then
+        code, end_row = send.get_pipe_chain(bufnr, true)
+    end
+
+    if code then
+        -- Strip comments and collapse to single line
+        local lines = {}
+        for line in code:gmatch("[^\n]+") do
+            local stripped = line:gsub("%s*#.*", "")
+            if stripped:match("%S") then table.insert(lines, stripped) end
+        end
+        code = table.concat(lines, " ")
+        -- Move cursor to end of chain
+        if end_row then vim.api.nvim_win_set_cursor(0, { end_row, 0 }) end
+    else
+        -- Fallback to single line
+        code = vim.api.nvim_get_current_line():gsub("%s*#.*", "")
+    end
+
+    if not code:match("%S") then return end
+
+    local check = code:gsub('".-"', "")
+    if check:find(";") then
         warn("`print(line)` works only if `line` is a single command")
     end
-    cleanl = string.gsub(lin, "%s*#.*", "")
-    M.insert("print(" .. cleanl .. ")", "comment")
+    M.insert("print(" .. code .. ")", "comment")
 end
 
 ---Call R functions for the word under cursor

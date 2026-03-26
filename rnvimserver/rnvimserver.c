@@ -9,14 +9,16 @@
 #include "complete.h"
 #include "resolve.h"
 #include "hover.h"
+#include "definition.h"
 #include "signature.h"
 #include "tcp.h"
 #include "obbr.h"
 #include "lsp.h"
 #include "utilities.h"
 #include "rhelp.h"
+#include "roxygen.h"
 #include "chunk.h"
-#include "../common.h"
+#include "../nvimcom/src/common.h"
 
 #ifdef WIN32
 // Include for _setmode and _O_BINARY
@@ -28,13 +30,12 @@
  * Global variables (declared in global_vars.h)
  */
 
-LibList *inst_libs;    // Pointer to first package data
-LibList *loaded_libs;  // Pointer to loaded library
-char *glbnv_buffer;    // Global environment buffer
-char tmpdir[256];      // Temporary directory
-int auto_obbr;         // Auto object browser flag
-char localtmpdir[256]; // Local temporary directory
-int r_running;         // Indicates whether R is running
+LibList *inst_libs;   // Pointer to first package data
+LibList *loaded_libs; // Pointer to loaded library
+char *glbnv_buffer;   // Global environment buffer
+char tmpdir[256];     // Temporary directory
+int auto_obbr;        // Auto object browser flag
+int r_running;        // Indicates whether R is running
 
 typedef struct active_request_ {
     char id[16];
@@ -203,11 +204,6 @@ static void handle_initialize(const char *request_id) {
     // initialize global variables;
     strncpy(tmpdir, getenv("RNVIM_TMPDIR"), 255);
     set_doc_width(getenv("R_LS_DOC_WIDTH"));
-    if (getenv("RNVIM_LOCAL_TMPDIR")) {
-        strncpy(localtmpdir, getenv("RNVIM_LOCAL_TMPDIR"), 255);
-    } else {
-        strncpy(localtmpdir, getenv("RNVIM_TMPDIR"), 255);
-    }
     set_max_depth(atoi(getenv("RNVIM_MAX_DEPTH")));
 
     init_cmp();
@@ -240,6 +236,37 @@ static void handle_initialize(const char *request_id) {
         p = str_cat(p, "\"completionProvider\":{\"resolveProvider\":true,"
                        "\"triggerCharacters\":[\".\",\" "
                        "\",\":\",\"(\",\"$\",\"\\\\\"]}");
+        has_cpblt = 1;
+    }
+    if (!disable || strstr(disable, "definition") == NULL) {
+        if (has_cpblt)
+            p = str_cat(p, ",");
+        p = str_cat(p, "\"definitionProvider\":true");
+        has_cpblt = 1;
+    }
+    if (!disable || strstr(disable, "documentSymbol") == NULL) {
+        if (has_cpblt)
+            p = str_cat(p, ",");
+        p = str_cat(p, "\"documentSymbolProvider\":true");
+        has_cpblt = 1;
+    }
+    if (!disable || strstr(disable, "references") == NULL) {
+        if (has_cpblt)
+            p = str_cat(p, ",");
+        p = str_cat(p, "\"referencesProvider\":true");
+        has_cpblt = 1;
+    }
+    if (!disable || strstr(disable, "implementation") == NULL) {
+        if (has_cpblt)
+            p = str_cat(p, ",");
+        p = str_cat(p, "\"implementationProvider\":true");
+        has_cpblt = 1;
+    }
+    if (!disable || strstr(disable, "documentHighlight") == NULL) {
+        if (has_cpblt)
+            p = str_cat(p, ",");
+        p = str_cat(p, "\"documentHighlightProvider\":true");
+        has_cpblt = 1;
     }
 
     str_cat(p, "}}}");
@@ -248,6 +275,14 @@ static void handle_initialize(const char *request_id) {
 
     send_ls_response(request_id, res);
 }
+
+// Forward declarations
+static void send_location_result(const char *params);
+static void send_definition_result(const char *params);
+static void send_document_symbols_result(const char *params);
+static void send_references_result(const char *params);
+static void send_implementation_result(const char *params);
+static void send_document_highlight_result(const char *params);
 
 static void handle_exe_cmd(const char *params) {
     Log("handle_exe_cmd: %s\n", params);
@@ -260,12 +295,17 @@ static void handle_exe_cmd(const char *params) {
             complete_rhelp(params);
         } else if (*code == '@') {
             complete_fig_tbl(params);
+        } else if (*code == 'O') {
+            complete_roxygen(params);
         } else {
             complete_chunk_opts(*code, params);
         }
         break;
     case 'H':
         hover(params);
+        break;
+    case 'G':
+        definition(params);
         break;
     case 'S':
         signature(params);
@@ -277,6 +317,21 @@ static void handle_exe_cmd(const char *params) {
     case 'N':
         cut_json_str(&code, 1);
         send_null(code);
+        break;
+    case 'D': // Definition result from Lua
+        send_definition_result(params);
+        break;
+    case 'Y': // Document symbols result from Lua
+        send_document_symbols_result(params);
+        break;
+    case 'R': // References result from Lua
+        send_references_result(params);
+        break;
+    case 'I': // Implementation result from Lua
+        send_implementation_result(params);
+        break;
+    case 'L': // Document highlight result from Lua
+        send_document_highlight_result(params);
         break;
     case '1': // Start TCP server and wait nvimcom connection
         start_server();
@@ -387,6 +442,273 @@ static void handle_signature(const char *id) {
     send_cmd_to_nvim(h_cmd);
 }
 
+/* Extract the textDocument URI from LSP params into buf (null-terminated).
+ * URI chars are all percent-encoded so no single quotes can appear — safe
+ * to embed directly in a single-quoted Lua string literal. */
+static void extract_doc_uri(const char *params, char *buf, int buf_size) {
+    buf[0] = '\0';
+    char *p = strstr(params, "\"uri\":\"");
+    if (!p)
+        return;
+    p += 7;
+    char *end = strchr(p, '"');
+    if (!end)
+        return;
+    int len = (int)(end - p);
+    if (len >= buf_size)
+        len = buf_size - 1;
+    strncpy(buf, p, len);
+    buf[len] = '\0';
+}
+
+/* Shared handler for LSP requests that carry a textDocument position.
+ * Extracts line/character and URI from params, then calls the named
+ * Lua function as: require('r.lsp').<lua_fn>(id, line, col, bufnr) */
+static void handle_location_request(const char *id, const char *params,
+                                    const char *lua_fn) {
+    char *position = strstr(params, "\"position\":{");
+    if (!position) {
+        fprintf(stderr, "Error in textDocument/%s: missing `position` field\n",
+                lua_fn);
+        fflush(stderr);
+        return;
+    }
+    position += 11;
+    char *line = strstr(position, "\"line\":");
+    char *col = strstr(position, "\"character\":");
+    // Extract URI BEFORE cut_json_int calls, which insert \0 bytes that can
+    // truncate the buffer and hide fields that appear later in the JSON.
+    char uri[2048];
+    extract_doc_uri(params, uri, sizeof(uri));
+    cut_json_int(&line, 7);
+    cut_json_int(&col, 12);
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd) - 1,
+             "require('r.lsp').%s(%s, %s, %s, vim.uri_to_bufnr('%s'))", lua_fn,
+             id, line, col, uri);
+    send_cmd_to_nvim(cmd);
+}
+
+static void handle_definition(const char *id, const char *params) {
+    handle_location_request(id, params, "definition");
+}
+
+static void handle_document_symbols(const char *id) {
+    char s_cmd[128];
+    snprintf(s_cmd, 127, "require('r.lsp').document_symbols(%s)", id);
+    send_cmd_to_nvim(s_cmd);
+}
+
+static void handle_references(const char *id, const char *params) {
+    handle_location_request(id, params, "references");
+}
+
+static void handle_implementation(const char *id, const char *params) {
+    handle_location_request(id, params, "implementation");
+}
+
+static void handle_document_highlight(const char *id, const char *params) {
+    handle_location_request(id, params, "document_highlight");
+}
+
+// Generic function to handle location-based LSP responses (definition,
+// references, implementation)
+static void send_location_result(const char *params) {
+    // IMPORTANT: Search for ALL fields BEFORE calling cut_json_* functions,
+    // because those functions NULL-terminate and modify the params string!
+    char *id = strstr(params, "\"orig_id\":");
+    char *locations = strstr(params, "\"locations\":");
+    char *uri = strstr(params, "\"uri\":\"");
+    char *line_field = strstr(params, "\"line\":");
+    char *col_field = strstr(params, "\"col\":");
+
+    if (!id)
+        return;
+
+    cut_json_int(&id, 10);
+
+    if (locations) {
+        // Format: "locations":[{file:"...",line:N,col:N},...]
+        char *arr_start = strchr(locations, '[');
+        char *arr_end = strrchr(locations, ']');
+        if (!arr_start || !arr_end) {
+            send_null(id);
+            return;
+        }
+
+        size_t arr_len = (size_t)(arr_end - arr_start);
+        size_t result_size = arr_len * 4 + 256;
+        char *result = (char *)malloc(result_size);
+        char *p = result;
+        p += snprintf(p, result_size,
+                      "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":[", id);
+
+        char *loc = arr_start + 1;
+        int first = 1;
+        while (loc < arr_end) {
+            char *obj_start = strchr(loc, '{');
+            if (!obj_start || obj_start >= arr_end)
+                break;
+
+            char *obj_end = strchr(obj_start, '}');
+            if (!obj_end || obj_end > arr_end)
+                break;
+
+            char *file = strstr(obj_start, "\"file\":\"");
+            char *line = strstr(obj_start, "\"line\":");
+            char *col = strstr(obj_start, "\"col\":");
+            char *end_col_field = strstr(obj_start, "\"end_col\":");
+
+            if (file && line && col && file < obj_end && line < obj_end &&
+                col < obj_end) {
+                file += 8;
+                char *file_end = strchr(file, '"');
+                if (file_end && file_end < obj_end) {
+                    size_t file_len = file_end - file;
+                    char *file_str = (char *)malloc(file_len + 1);
+                    strncpy(file_str, file, file_len);
+                    file_str[file_len] = '\0';
+
+                    line += 7;
+                    col += 6;
+                    int line_num = atoi(line);
+                    int col_num = atoi(col);
+                    int end_col_num = (end_col_field && end_col_field < obj_end)
+                                          ? atoi(end_col_field + 10)
+                                          : col_num;
+
+                    if (!first) {
+                        p += snprintf(p, result_size - (p - result), ",");
+                    }
+                    first = 0;
+
+                    p += snprintf(p, result_size - (p - result),
+                                  "{\"uri\":\"file://"
+                                  "%s\",\"range\":{\"start\":{\"line\":%d,"
+                                  "\"character\":%d},"
+                                  "\"end\":{\"line\":%d,\"character\":%d}}}",
+                                  file_str, line_num, col_num, line_num,
+                                  end_col_num);
+
+                    free(file_str);
+                }
+            }
+
+            loc = obj_end + 1;
+        }
+
+        p += snprintf(p, result_size - (p - result), "]}");
+        send_ls_response(id, result);
+        free(result);
+    } else {
+        // Single location: use the fields we already found
+        if (!uri || !line_field || !col_field)
+            return;
+
+        cut_json_str(&uri, 7);
+        cut_json_int(&line_field, 7);
+        cut_json_int(&col_field, 6);
+
+        // Build the LSP Location response
+        const char *fmt = "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":"
+                          "{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%s,"
+                          "\"character\":%s},"
+                          "\"end\":{\"line\":%s,\"character\":%s}}}}";
+
+        size_t len = strlen(uri) + strlen(id) + strlen(line_field) * 2 +
+                     strlen(col_field) * 2 + 256;
+        char *res = (char *)malloc(len);
+        snprintf(res, len - 1, fmt, id, uri, line_field, col_field, line_field,
+                 col_field);
+        send_ls_response(id, res);
+        free(res);
+    }
+}
+
+static void send_definition_result(const char *params) {
+    send_location_result(params);
+}
+
+static void send_document_symbols_result(const char *params) {
+    char *id = strstr(params, "\"orig_id\":");
+    char *symbols = strstr(params, "\"symbols\":");
+
+    if (!id) {
+        return;
+    }
+
+    cut_json_int(&id, 10);
+
+    if (!symbols) {
+        send_null(id);
+        return;
+    }
+
+    // Find the symbols array
+    char *arr_start = strchr(symbols, '[');
+    char *arr_end = strrchr(symbols, ']');
+    if (!arr_start || !arr_end) {
+        send_null(id);
+        return;
+    }
+
+    // Build the result - we'll pass through the symbols array as-is since Lua
+    // already formatted it correctly.
+    // The Lua code sends DocumentSymbol objects with all required fields
+    size_t result_size = (arr_end - arr_start) + 256;
+    char *result = (char *)malloc(result_size);
+
+    // Extract just the array content
+    size_t array_len = arr_end - arr_start + 1;
+    char *array_content = (char *)malloc(array_len + 1);
+    strncpy(array_content, arr_start, array_len);
+    array_content[array_len] = '\0';
+
+    snprintf(result, result_size,
+             "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}", id,
+             array_content);
+
+    send_ls_response(id, result);
+    free(array_content);
+    free(result);
+}
+
+static void send_references_result(const char *params) {
+    send_location_result(params);
+}
+
+static void send_implementation_result(const char *params) {
+    send_location_result(params);
+}
+
+static void send_document_highlight_result(const char *params) {
+    char *id = strstr(params, "\"orig_id\":");
+    char *highlights = strstr(params, "\"highlights\":");
+    if (!id)
+        return;
+    cut_json_int(&id, 10);
+    if (!highlights) {
+        send_null(id);
+        return;
+    }
+
+    char *arr_start = strchr(highlights, '[');
+    char *arr_end = strrchr(highlights, ']');
+    if (!arr_start || !arr_end) {
+        send_null(id);
+        return;
+    }
+
+    size_t array_len = arr_end - arr_start + 1;
+    size_t result_size = array_len + 256;
+    char *result = (char *)malloc(result_size);
+    snprintf(result, result_size,
+             "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%.*s}", id,
+             (int)array_len, arr_start);
+    send_ls_response(id, result);
+    free(result);
+}
+
 // --- Main Server Loop ---
 
 static void lsp_loop(void) {
@@ -475,6 +797,16 @@ static void lsp_loop(void) {
                 handle_hover(id);
             } else if (strcmp(method, "textDocument/signatureHelp") == 0) {
                 handle_signature(id);
+            } else if (strcmp(method, "textDocument/definition") == 0) {
+                handle_definition(id, params);
+            } else if (strcmp(method, "textDocument/documentSymbol") == 0) {
+                handle_document_symbols(id);
+            } else if (strcmp(method, "textDocument/references") == 0) {
+                handle_references(id, params);
+            } else if (strcmp(method, "textDocument/implementation") == 0) {
+                handle_implementation(id, params);
+            } else if (strcmp(method, "textDocument/documentHighlight") == 0) {
+                handle_document_highlight(id, params);
             } else if (strcmp(method, "initialize") == 0) {
                 handle_initialize(id);
             } else if (strcmp(method, "initialized") == 0) {

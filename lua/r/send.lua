@@ -356,7 +356,7 @@ end
 ---@param what string|nil Additional operation to perform
 ---@return boolean
 M.source_lines = function(lines, what)
-    require("r.edit").add_for_deletion(config.source_write)
+    require("r.edit").add_for_deletion(config.source_file)
 
     local rcmd
 
@@ -370,13 +370,14 @@ M.source_lines = function(lines, what)
             rcmd = 'system2("bash", c("-c", shQuote(r"---(' .. rcmd .. ')---")))'
         end
     else
-        vim.fn.writefile(lines, config.source_write)
+        vim.fn.writefile(lines, config.source_file)
         local sargs = string.gsub(M.get_source_args(), "^, ", "")
         if what then
             if what == "PythonCode" then
-                rcmd = 'reticulate::py_run_file("' .. config.source_read .. '")'
+                rcmd = 'reticulate::py_run_file("' .. config.source_file .. '")'
             elseif what == "BashCode" then
-                rcmd = 'system2("bash", c("' .. config.source_read .. '"))'
+                rcmd = 'system2("bash", c("' .. config.source_file .. '"))'
+                
             else
                 rcmd = "Rnvim." .. what .. "(" .. sargs .. ")"
             end
@@ -826,16 +827,17 @@ M.line = function(m)
     end
 end
 
---- Send the above chain of piped commands
-M.chain = function()
-    local bufnr = create_r_buffer()
-    if not bufnr then return end
-
+--- Get the pipe chain node at cursor position
+--- @param bufnr integer Buffer number
+--- @return table|nil pipe_node The pipe chain node, or nil
+--- @return table|nil root The tree root
+--- @return integer cursor_row The cursor row (0-indexed)
+local function get_pipe_node(bufnr)
     local parser = vim.treesitter.get_parser(bufnr, "r")
-    if not parser then return end
+    if not parser then return nil end
 
     local tree = parser:parse()[1]
-    if not tree then return end
+    if not tree then return nil end
 
     local root = tree:root()
     local query = vim.treesitter.query.parse(
@@ -865,17 +867,48 @@ M.chain = function()
     )
 
     local cursor_row = vim.api.nvim_win_get_cursor(0)[1] - 1
-    local pipe_block_node
 
     for _, node in query:iter_captures(root, bufnr, 0, -1) do
         local start_row, _, end_row = node:range()
         if cursor_row >= start_row and cursor_row <= end_row then
-            pipe_block_node = node
-            break
+            return node, root, cursor_row
+        end
+    end
+    return nil
+end
+
+--- Get the full pipe chain code at cursor (with optional assignment)
+--- @param bufnr integer Buffer number
+--- @param include_assignment boolean Include parent assignment if present
+--- @return string|nil code The code, or nil if not in a pipe chain
+--- @return integer|nil end_row Last row of the chain (1-indexed)
+M.get_pipe_chain = function(bufnr, include_assignment)
+    local pipe_node, _, _ = get_pipe_node(bufnr)
+    if not pipe_node then return nil, nil end
+
+    local node = pipe_node
+    if include_assignment then
+        local parent = pipe_node:parent()
+        if parent and parent:type() == "binary_operator" then
+            local op = parent:field("operator")[1]
+            if op then
+                local op_text = vim.treesitter.get_node_text(op, bufnr)
+                if op_text == "<-" or op_text == "=" then node = parent end
+            end
         end
     end
 
-    if not pipe_block_node then
+    local _, _, end_row = node:range()
+    return vim.treesitter.get_node_text(node, bufnr), end_row + 1
+end
+
+--- Send the above chain of piped commands
+M.chain = function()
+    local bufnr = create_r_buffer()
+    if not bufnr then return end
+
+    local pipe_node, root, cursor_row = get_pipe_node(bufnr)
+    if not pipe_node then
         inform("The cursor is not inside a piped expression.")
         return
     end
@@ -891,21 +924,30 @@ M.chain = function()
     )
 
     local sibling = nil
+    local last_sibling = nil
+    local pipe_start_row, _, pipe_end_row = pipe_node:range()
 
-    local pipe_start_row, _, pipe_end_row = pipe_block_node:range()
+    -- Check if cursor is on a comment line
+    local cur_line = vim.api.nvim_buf_get_lines(bufnr, cursor_row, cursor_row + 1, false)[1]
+        or ""
+    local on_comment = cur_line:match("^%s*#") ~= nil
 
     for id, node, _ in call_query:iter_captures(root, bufnr, pipe_start_row, pipe_end_row) do
         local capture_name = call_query.captures[id]
         local _, _, end_row = node:range()
 
-        if capture_name == "operator" and cursor_row <= end_row then
-            sibling = node:prev_sibling()
-            break
+        if capture_name == "operator" then
+            if cursor_row <= end_row then
+                sibling = node:prev_sibling()
+                break
+            end
+            -- Track last operator before cursor (for comment line case)
+            last_sibling = node:prev_sibling()
         end
     end
 
-    local captured_node = sibling or pipe_block_node
-
+    -- If on comment and no match found, use last operator before comment
+    local captured_node = sibling or (on_comment and last_sibling) or pipe_node
     M.source_lines({ vim.treesitter.get_node_text(captured_node, bufnr) }, nil)
 end
 

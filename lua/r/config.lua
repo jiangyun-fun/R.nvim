@@ -12,6 +12,25 @@ local hooks = require("r.hooks")
 ---Enable the signature help provider
 ---@field signature? boolean
 ---
+---Enable the definition provider
+---@field definition? boolean
+---
+---Use git to find workspace R files, respecting .gitignore; falls back to
+---recursive scan if git is unavailable or the directory is not a repository
+---@field use_git_files? boolean
+---
+---Enable the references provider
+---@field references? boolean
+---
+---Enable the implementation provider
+---@field implementation? boolean
+---
+---Enable the document symbol provider
+---@field document_symbol? boolean
+---
+---Enable the document highlight provider
+---@field document_highlight? boolean
+---
 ---Text width of documentation window displayed when
 ---an item is selected
 ---@field doc_width? integer
@@ -201,10 +220,6 @@ local hooks = require("r.hooks")
 ---`false`. Do `:help listmethods` for more information.
 ---@field listmethods? boolean
 ---
----Optionally supply the path to the directory where the {nvimcom} is
----installed. See `/doc/remote_access.md` for more information.
----@field local_R_library_dir? string
----
 ---When sending lines to the console, this is the number of lines at which
 ---R.nvim will instead create and source a temporary file. Defaults to `20`.
 ---Do `:help max_paste_lines` for more information.
@@ -300,6 +315,12 @@ local hooks = require("r.hooks")
 ---How to highlight code blocks in Quarto and Rmd documents.
 ---@field quarto_chunk_hl? { highlight: boolean, yaml_hl: boolean, virtual_title: boolean, bg: string, events: string }
 ---
+---Enable ROxygen support.
+---Controls both highlighting of ROxygen comments and ROxygen-specific
+---LSP completion behavior (tag completion, Rhelp keyword completion, and R
+---code completion inside `@examples`).
+---@field roxygen_hl? boolean
+---
 ---The default height for the R console; defaults to `15`.
 ---Do `:help rconsole_height` for more information.
 ---@field rconsole_height? integer
@@ -312,9 +333,20 @@ local hooks = require("r.hooks")
 ---defaults to `true`. Do `:help register_treesitter` for more information.
 ---@field register_treesitter? boolean
 ---
----Options for accessing a remote R session from local Neovim.
----Do `:help remote_compldir` for more information.
----@field remote_compldir? string
+---Absolute path to remote cache dir to be used by R to save files for R.nvim.
+---Example: /home/username/.cache/R.nvim
+---This option should be set only if you are running R in a remote machine
+---@field remote_compl_dir? string
+---
+---IP address, hostname or alias of remote machine where R installed.
+---This option should be set only if you are running R in a remote machine
+---from a local Neovim.
+---@field remote_R_host? string
+---
+---IP address, hostname or alias of local machine (this machine) where Neovim is installed.
+---This option should be set only if you are running R in a remote machine
+---from a local Neovim.
+---@field local_nvim_addr? string
 ---
 ---Whether to automatically remove {knitr} cache files; defaults to `false`.
 ---This field is undocumented, but users can still apply it if they really
@@ -411,11 +443,10 @@ local hooks = require("r.hooks")
 ---@field rnvim_home? string
 ---@field uservimfiles? string
 ---@field user_login? string
----@field localtmpdir? string
----@field source_read? string
----@field source_write? string
+---@field source_file? string
 ---@field term_title? string -- Pid of window application.
 ---@field term_pid? integer -- Part of the window title.
+---@field remote_tmpdir? string
 
 ---@type RConfig
 local config = {
@@ -449,6 +480,12 @@ local config = {
         completion = true,
         hover = true,
         signature = true,
+        definition = true,
+        use_git_files = true,
+        references = true,
+        implementation = true,
+        document_symbol = true,
+        document_highlight = true,
         doc_width = 0,
         fun_data_1 = { "select", "rename", "mutate", "filter" },
         fun_data_2 = { ggplot = { "aes" }, with = { "*" } },
@@ -477,7 +514,6 @@ local config = {
     latex_build_dir = "",
     sweaveargs = "",
     listmethods = false,
-    local_R_library_dir = "",
     max_paste_lines = 20,
     min_editor_width = 80,
     setwd = "no",
@@ -510,10 +546,12 @@ local config = {
         bg = "",
         events = "",
     },
+    roxygen_hl = false,
     rconsole_height = 15,
     rconsole_width = 80,
     register_treesitter = true,
-    remote_compldir = "",
+    remote_compl_dir = "",
+    remote_R_host = "",
     rm_knit_cache = false,
     rmarkdown_args = "",
     rmd_environment = ".GlobalEnv",
@@ -597,7 +635,8 @@ end
 --- The key names, types and values of user options are all checked before
 --- being applied. If a check fails, a warning is show, and the default option
 --- is used instead.
-local apply_user_opts = function()
+---@param opts any An option or table of options supplied by the user
+local apply_user_opts = function(opts)
     -- Ensure that some config options will be in lower case
     for _, v in pairs({
         "auto_start",
@@ -608,7 +647,7 @@ local apply_user_opts = function()
         "setwd",
         "set_params",
     }) do
-        if user_opts[v] then user_opts[v] = string.lower(user_opts[v]) end
+        if opts[v] then opts[v] = string.lower(opts[v]) end
     end
 
     -- stylua: ignore start
@@ -711,7 +750,7 @@ local apply_user_opts = function()
         config_chunk[key[#key]] = user_opt
     end
 
-    apply(user_opts, {})
+    apply(opts, {})
 end
 
 local set_directories = function()
@@ -812,36 +851,28 @@ local set_directories = function()
     end
 
     -- Adjust options when accessing R remotely
-    config.localtmpdir = config.tmpdir
-    if config.remote_compldir ~= "" then
-        vim.env.RNVIM_REMOTE_COMPLDIR = config.remote_compldir
-        vim.env.RNVIM_REMOTE_TMPDIR = config.remote_compldir .. "/tmp"
-        config.tmpdir = config.compldir .. "/tmp"
-    else
-        vim.env.RNVIM_REMOTE_COMPLDIR = config.compldir
-        vim.env.RNVIM_REMOTE_TMPDIR = config.tmpdir
+    if config.remote_R_host ~= "" then
+        config.tmpdir = config.compldir .. "/remote/tmp"
+        if config.remote_compl_dir == "" then
+            config.remote_compl_dir = config.compldir
+        end
+        config.remote_tmpdir = config.remote_compl_dir .. "/tmp"
     end
 
     utils.ensure_directory_exists(config.tmpdir)
-    utils.ensure_directory_exists(config.localtmpdir)
 
     vim.env.RNVIM_TMPDIR = config.tmpdir
     vim.env.RNVIM_COMPLDIR = config.compldir
 
     -- Make the file name of files to be sourced
-    if config.remote_compldir ~= "" then
-        config.source_read = config.remote_compldir .. "/tmp/Rsource-" .. vim.fn.getpid()
-    else
-        config.source_read = config.tmpdir .. "/Rsource-" .. vim.fn.getpid()
-    end
-    config.source_write = config.tmpdir .. "/Rsource-" .. vim.fn.getpid()
+    config.source_file = config.tmpdir .. "/Rsource-" .. vim.fn.getpid()
 end
 
 local check_readme = function()
     -- Create or update the README (objls_ files will be regenerated if older than
     -- the README).
     local need_readme = false
-    local first_line = "Last change in this file: 2026-01-17"
+    local first_line = "Last change in this file: 2026-03-01"
     if
         vim.fn.filereadable(config.compldir .. "/README") == 0
         or vim.fn.readfile(config.compldir .. "/README")[1] ~= first_line
@@ -1045,7 +1076,7 @@ local global_setup = function()
         vim.g.R_Nvim_status = 1
     end
 
-    apply_user_opts()
+    apply_user_opts(user_opts)
 
     -- Config values that depend on either system features or other config
     -- values.
@@ -1079,6 +1110,21 @@ local global_setup = function()
     end
 
     require("r.commands").create_user_commands()
+
+    if config.remote_R_host ~= "" then
+        config.R_args = {
+            config.remote_R_host,
+            "-t",
+            " R_DEFAULT_PACKAGES=datasets,utils,grDevices,graphics,stats,methods,nvimcom RNVIM_TMPDIR="
+                .. config.remote_tmpdir
+                .. " "
+                .. config.R_app
+                .. " "
+                .. table.concat(config.R_args, " "),
+        }
+        config.R_app = "ssh"
+    end
+
     vim.fn.timer_start(1, require("r.config").check_health)
 
     vim.schedule(function() require("r.server").check_nvimcom_version() end)
@@ -1148,6 +1194,12 @@ M.real_setup = function()
     hooks.run(config, "on_filetype", false)
 
     require("r.rproj").apply_settings(config)
+
+    local rnc = vim.api.nvim_buf_get_name(0):match("(.*/).*") .. "rnvim_config.lua"
+    if vim.uv.fs_access(rnc, "R") then
+        local opts = dofile(rnc)
+        apply_user_opts(opts)
+    end
 
     local no_ts = { "rhelp" }
     if config.register_treesitter then
