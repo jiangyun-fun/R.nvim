@@ -778,15 +778,15 @@ end
 
 --- Get the pipe chain node at cursor position
 --- @param bufnr integer Buffer number
---- @return table|nil pipe_node The pipe chain node, or nil
---- @return table|nil root The tree root
---- @return integer cursor_row The cursor row (0-indexed)
+--- @return table? pipe_node The pipe chain node, or nil
+--- @return table? root The tree root
+--- @return integer? cursor_row The cursor row (0-indexed)
 local function get_pipe_node(bufnr)
     local parser = vim.treesitter.get_parser(bufnr, "r")
-    if not parser then return nil end
+    if not parser then return nil, nil, nil end
 
     local tree = parser:parse()[1]
-    if not tree then return nil end
+    if not tree then return nil, nil, nil end
 
     local root = tree:root()
     local query = vim.treesitter.query.parse(
@@ -823,7 +823,7 @@ local function get_pipe_node(bufnr)
             return node, root, cursor_row
         end
     end
-    return nil
+    return nil, nil, nil
 end
 
 --- Get the full pipe chain code at cursor (with optional assignment)
@@ -857,7 +857,7 @@ M.chain = function()
     if not bufnr then return end
 
     local pipe_node, root, cursor_row = get_pipe_node(bufnr)
-    if not pipe_node then
+    if not pipe_node or not root or not cursor_row then
         inform("The cursor is not inside a piped expression.")
         return
     end
@@ -872,8 +872,8 @@ M.chain = function()
         ]]
     )
 
-    local sibling = nil
-    local last_sibling = nil
+    local sibling = nil ---@type TSNode?
+    local last_sibling = nil ---@type TSNode?
     local pipe_start_row, _, pipe_end_row = pipe_node:range()
 
     -- Check if cursor is on a comment line
