@@ -9,6 +9,9 @@ local quarto = require("r.quarto")
 
 local create_r_buffer = require("r.buffer").create_r_buffer
 
+-- Track which languages have been warned about missing TreeSitter grammar
+local ts_warned = {} ---@type table<string, boolean>
+
 --- Check if line is a comment
 ---@param line string
 ---@return boolean
@@ -174,14 +177,13 @@ local function get_ts_code_to_send(chunk, txt, row, lang, should_stop_fn)
     local ok, parser = pcall(vim.treesitter.get_string_parser, chunk_content, lang)
     if not ok or not parser then
         -- One-time warning if TreeSitter grammar is missing
-        if not _G.R_nvim_ts_warned then _G.R_nvim_ts_warned = {} end
-        if not _G.R_nvim_ts_warned[lang] then
+        if not ts_warned[lang] then
             warn(
                 "TreeSitter grammar for "
                     .. lang
                     .. " not found. Multi-line code detection disabled."
             )
-            _G.R_nvim_ts_warned[lang] = true
+            ts_warned[lang] = true
         end
         table.insert(lines, txt)
         return lines, row
