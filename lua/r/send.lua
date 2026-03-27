@@ -173,6 +173,16 @@ local function get_ts_code_to_send(chunk, txt, row, lang, should_stop_fn)
 
     local ok, parser = pcall(vim.treesitter.get_string_parser, chunk_content, lang)
     if not ok or not parser then
+        -- One-time warning if TreeSitter grammar is missing
+        if not _G.R_nvim_ts_warned then _G.R_nvim_ts_warned = {} end
+        if not _G.R_nvim_ts_warned[lang] then
+            warn(
+                "TreeSitter grammar for "
+                    .. lang
+                    .. " not found. Multi-line code detection disabled."
+            )
+            _G.R_nvim_ts_warned[lang] = true
+        end
         table.insert(lines, txt)
         return lines, row
     end
@@ -217,6 +227,29 @@ local function bash_should_stop(parent)
 end
 
 local M = {}
+
+--- Helper to send a chunk line with TreeSitter-based code extraction
+---@param chunk table The current chunk object
+---@param line string The current line text
+---@param lnum number The current line number
+---@param lang string The language for TreeSitter parsing
+---@param stop_fn function The stop condition function
+---@param wrap_fn function Function to wrap the code for execution
+---@param m string|nil Movement mode ("move" or nil)
+---@return boolean Whether the command was sent successfully
+local function send_chunk_line(chunk, line, lnum, lang, stop_fn, wrap_fn, m)
+    local lines
+    lines, lnum = get_ts_code_to_send(chunk, line, lnum, lang, stop_fn)
+    local code = utils.dedent(table.concat(lines, "\n"))
+    code = wrap_fn(code)
+    local ok = M.cmd(code)
+    if ok and m == "move" then
+        local last_line = vim.api.nvim_buf_line_count(0)
+        vim.api.nvim_win_set_cursor(0, { math.min(lnum, last_line), 0 })
+        cursor.move_next_line()
+    end
+    return ok
+end
 
 --- Change the pointer to the function used to send commands to R.
 M.set_send_cmd_fun = function()
@@ -290,6 +323,7 @@ M.source_lines = function(lines, what)
             rcmd = utils.dedent(rcmd)
             rcmd = 'reticulate::py_run_string(r"---(' .. rcmd .. ')---")'
         elseif what and what == "BashCode" then
+            rcmd = utils.dedent(rcmd)
             rcmd = 'system2("bash", c("-c", shQuote(r"---(' .. rcmd .. ')---")))'
         end
     else
@@ -675,37 +709,31 @@ M.line = function(m)
 
     if vim.tbl_contains({ "rnoweb", "markdown", "rmd", "quarto" }, vim.bo.filetype) then
         if quarto.is_python(lang) then
-            -- Use TreeSitter to get full Python expression
-            local lines
-            lines, lnum = get_ts_code_to_send(chunk, line, lnum, "python", python_should_stop)
-
-            local code = utils.dedent(table.concat(lines, "\n"))
-
-            code = 'reticulate::py_run_string(r"---(' .. code .. ')---")'
-            ok = M.cmd(code)
-            if ok and m == "move" then
-                -- Set cursor to end of sent code, then move_next_line will increment to next line
-                local last_line = vim.api.nvim_buf_line_count(0)
-                vim.api.nvim_win_set_cursor(0, { math.min(lnum, last_line), 0 })
-                cursor.move_next_line()
-            end
+            send_chunk_line(
+                chunk,
+                line,
+                lnum,
+                "python",
+                python_should_stop,
+                function(code)
+                    return 'reticulate::py_run_string(r"---(' .. code .. ')---")'
+                end,
+                m
+            )
             return
         end
         if quarto.is_bash(lang) then
-            -- Use TreeSitter to get full Bash expression
-            local lines
-            lines, lnum = get_ts_code_to_send(chunk, line, lnum, "bash", bash_should_stop)
-
-            local code = table.concat(lines, "\n")
-
-            code = 'system2("bash", c("-c", shQuote(r"---(' .. code .. ')---")))'
-            ok = M.cmd(code)
-            if ok and m == "move" then
-                -- Set cursor to end of sent code, then move_next_line will increment to next line
-                local last_line = vim.api.nvim_buf_line_count(0)
-                vim.api.nvim_win_set_cursor(0, { math.min(lnum, last_line), 0 })
-                cursor.move_next_line()
-            end
+            send_chunk_line(
+                chunk,
+                line,
+                lnum,
+                "bash",
+                bash_should_stop,
+                function(code)
+                    return 'system2("bash", c("-c", shQuote(r"---(' .. code .. ')---")))'
+                end,
+                m
+            )
             return
         end
         if not quarto.is_r(lang) then

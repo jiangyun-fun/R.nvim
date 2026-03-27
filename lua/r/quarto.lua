@@ -340,10 +340,7 @@ end
 --- This function checks if a language is "bash"
 ---@param lang string
 ---@return boolean
-M.is_bash = function(lang)
-    local bash_langs = { bash = true }
-    return bash_langs[lang] or false
-end
+M.is_bash = function(lang) return lang == "bash" end
 
 --- This function filters the code chunks based on the eval parameter. If the eval parameter is not found it is assumed to be true
 ---@param chunks table
@@ -396,6 +393,8 @@ M.codelines_from_chunks = function(chunks)
             content = utils.dedent(content)
             content = 'reticulate::py_run_string(r"---(' .. content .. ')---")'
         elseif M.is_bash(lang) then
+            -- Dedent Bash code (chunks can be indented in nested Quarto structures)
+            content = utils.dedent(content)
             content = 'system2("bash", c("-c", shQuote(r"---(' .. content .. ')---")))'
         end
 
