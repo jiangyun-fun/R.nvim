@@ -215,22 +215,15 @@ local function get_ts_code_to_send(chunk, txt, row, lang, should_stop_fn)
     return lines, row
 end
 
--- Stop conditions for different languages
-local function r_should_stop(parent)
-    local t = parent:type()
-    return t == "program" or t == "braced_expression"
-end
-
-local function python_should_stop(parent)
-    local t = parent:type()
-    return t == "module" or t == "block"
-end
-
-local function bash_should_stop(parent)
-    local t = parent:type()
-    if t == "program" then return true end
-    local bash_block_types = { compound_statement = true, subshell = true }
-    return bash_block_types[t] or false
+--- Build a stop-condition function from a list of TreeSitter node types.
+---@param stop_types string[]
+---@return fun(parent: TSNode): boolean
+local function make_should_stop(stop_types)
+    local lookup = {}
+    for _, t in ipairs(stop_types or {}) do
+        lookup[t] = true
+    end
+    return function(parent) return lookup[parent:type()] or false end
 end
 
 local M = {}
@@ -317,34 +310,29 @@ end
 --- Save lines in a temporary file and send to R a command to source them.
 ---@param lines string[] Lines to save and source
 ---@param what string|nil Additional operation to perform
+---@param lang_cfg RChunkLangConfig|nil Language config for wrapping
 ---@return boolean
-M.source_lines = function(lines, what)
+M.source_lines = function(lines, what, lang_cfg)
     require("r.edit").add_for_deletion(config.source_file)
 
     local rcmd
 
     if #lines < config.max_paste_lines then
         rcmd = table.concat(lines, "\n")
-        if what and what == "PythonCode" then
-            -- Dedent Python code
-            rcmd = utils.dedent(rcmd)
-            rcmd = 'reticulate::py_run_string(r"---(' .. rcmd .. ')---")'
-        elseif what and what == "BashCode" then
-            rcmd = utils.dedent(rcmd)
-            rcmd = 'system2("bash", c("-c", shQuote(r"---(' .. rcmd .. ')---")))'
+        if lang_cfg then
+            if lang_cfg.dedent then rcmd = utils.dedent(rcmd) end
+            local wrap_inline = lang_cfg.wrap_inline or function(code) return code end
+            rcmd = wrap_inline(rcmd)
         end
     else
         vim.fn.writefile(lines, config.source_file)
-        local sargs = string.gsub(M.get_source_args(), "^, ", "")
-        if what then
-            if what == "PythonCode" then
-                rcmd = 'reticulate::py_run_file("' .. config.source_file .. '")'
-            elseif what == "BashCode" then
-                rcmd = 'system2("bash", c("' .. config.source_file .. '"))'
-            else
-                rcmd = "Rnvim." .. what .. "(" .. sargs .. ")"
-            end
+        if lang_cfg and lang_cfg.wrap_file then
+            rcmd = lang_cfg.wrap_file(config.source_file)
+        elseif what then
+            local sargs = string.gsub(M.get_source_args(), "^, ", "")
+            rcmd = "Rnvim." .. what .. "(" .. sargs .. ")"
         else
+            local sargs = string.gsub(M.get_source_args(), "^, ", "")
             rcmd = "Rnvim.source(" .. sargs .. ")"
         end
     end
@@ -549,8 +537,9 @@ end
 ---@param m boolean True if should move to the next line.
 M.marked_block = function(m)
     local lang = utils.get_lang()
-    if lang ~= "r" and lang ~= "python" then
-        inform("Not in R code.")
+    local _, lang_cfg = quarto.resolve_lang(lang)
+    if not lang_cfg then
+        inform("Not in a supported language chunk.")
         return
     end
 
@@ -584,9 +573,8 @@ M.marked_block = function(m)
 
     local lines = vim.api.nvim_buf_get_lines(0, lineA - 1, lineB, true)
 
-    local what = lang == "python" and "PythonCode" or "block"
-    local ok = M.source_lines(lines, what)
-    if ok == 0 then return end
+    local ok = M.source_lines(lines, "block", lang_cfg)
+    if not ok then return end
 
     if m == true and lineB ~= last_line then
         vim.api.nvim_win_set_cursor(0, { lineB, 0 })
@@ -656,15 +644,14 @@ M.selection = function(m)
     end
 
     local ok
-    if lang == "python" then
-        ok = M.source_lines(lines, "PythonCode")
-    elseif lang == "bash" then
-        ok = M.source_lines(lines, "BashCode")
+    local _, lang_cfg = quarto.resolve_lang(lang)
+    if lang_cfg then
+        ok = M.source_lines(lines, nil, lang_cfg)
     else
         ok = M.source_lines(lines, "selection")
     end
 
-    if ok == 0 then return end
+    if not ok then return end
 
     if m == true then
         vim.api.nvim_win_set_cursor(0, end_pos)
@@ -715,47 +702,20 @@ M.line = function(m)
     local ok = false
 
     if vim.tbl_contains({ "rnoweb", "markdown", "rmd", "quarto" }, vim.bo.filetype) then
-        if quarto.is_python(lang) then
+        local canonical, lang_cfg = quarto.resolve_lang(lang)
+        if canonical and lang_cfg then
             send_chunk_line(
                 chunk,
                 line,
                 lnum,
-                "python",
-                python_should_stop,
-                function(code)
-                    return 'reticulate::py_run_string(r"---(' .. code .. ')---")'
-                end,
+                canonical,
+                make_should_stop(lang_cfg.stop_types),
+                lang_cfg.wrap_inline or function(code) return code end,
                 m
             )
-            return
+        else
+            inform("Not inside a supported code chunk.")
         end
-        if quarto.is_bash(lang) then
-            send_chunk_line(
-                chunk,
-                line,
-                lnum,
-                "bash",
-                bash_should_stop,
-                function(code)
-                    return 'system2("bash", c("-c", shQuote(r"---(' .. code .. ')---")))'
-                end,
-                m
-            )
-            return
-        end
-        if quarto.is_r(lang) then
-            send_chunk_line(
-                chunk,
-                line,
-                lnum,
-                "r",
-                r_should_stop,
-                function(code) return code end,
-                m
-            )
-            return
-        end
-        inform("Not inside R, Python or Bash code chunk.")
         return
     end
 
