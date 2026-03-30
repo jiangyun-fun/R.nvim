@@ -216,6 +216,11 @@ local function get_ts_code_to_send(chunk, txt, row, lang, should_stop_fn)
 end
 
 -- Stop conditions for different languages
+local function r_should_stop(parent)
+    local t = parent:type()
+    return t == "program" or t == "braced_expression"
+end
+
 local function python_should_stop(parent)
     local t = parent:type()
     return t == "module" or t == "block"
@@ -738,10 +743,20 @@ M.line = function(m)
             )
             return
         end
-        if not quarto.is_r(lang) then
-            inform("Not inside R, Python or Bash code chunk.")
+        if quarto.is_r(lang) then
+            send_chunk_line(
+                chunk,
+                line,
+                lnum,
+                "r",
+                r_should_stop,
+                function(code) return code end,
+                m
+            )
             return
         end
+        inform("Not inside R, Python or Bash code chunk.")
+        return
     end
 
     -- Not in a chunk, send the line
