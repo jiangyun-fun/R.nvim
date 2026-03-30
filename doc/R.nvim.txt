@@ -2529,7 +2529,7 @@ TreeSitter language name:
        stop_types = { "source_file", "module" },
        dedent = false,
        wrap_inline = function(code)
-         return 'JuliaCall::julia_command(r"---(' .. code .. ')---")'
+         return 'JuliaCall::julia_command(r"---(begin\n' .. code .. '\nend)---")'
        end,
        wrap_file = function(filepath)
          return 'JuliaCall::julia_source("' .. filepath .. '")'
