@@ -630,7 +630,7 @@ local config = {
                 return 'system2("bash", c("-c", shQuote(r"---(' .. code .. ')---")))'
             end,
             wrap_file = function(filepath)
-                return 'system2("bash", c("' .. filepath .. '"))'
+                return 'system2("bash", c(shQuote("' .. filepath .. '")))'
             end,
         },
     },

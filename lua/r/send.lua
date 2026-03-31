@@ -150,7 +150,7 @@ end
 ---@param chunk table The current chunk object
 ---@param txt string The text for the line the cursor is currently on
 ---@param row number The row the cursor is currently on
----@param lang string The language for TreeSitter parsing ("python" or "bash")
+---@param lang string The language for TreeSitter parsing
 ---@param should_stop_fn function Function that takes parent node and returns true to stop walking
 ---@return table, number
 local function get_ts_code_to_send(chunk, txt, row, lang, should_stop_fn)
@@ -235,12 +235,14 @@ local M = {}
 ---@param lang string The language for TreeSitter parsing
 ---@param stop_fn function The stop condition function
 ---@param wrap_fn function Function to wrap the code for execution
+---@param should_dedent boolean Whether to dedent the code
 ---@param m string|nil Movement mode ("move" or nil)
 ---@return boolean Whether the command was sent successfully
-local function send_chunk_line(chunk, line, lnum, lang, stop_fn, wrap_fn, m)
+local function send_chunk_line(chunk, line, lnum, lang, stop_fn, wrap_fn, should_dedent, m)
     local lines
     lines, lnum = get_ts_code_to_send(chunk, line, lnum, lang, stop_fn)
-    local code = utils.dedent(table.concat(lines, "\n"))
+    local code = table.concat(lines, "\n")
+    if should_dedent then code = utils.dedent(code) end
     code = wrap_fn(code)
     local ok = M.cmd(code)
     if ok and m == "move" then
@@ -592,7 +594,7 @@ M.selection = function(m)
         and not quarto.is_supported_lang(lang)
         and not vim.api.nvim_get_current_line():find("`r ")
     then
-        inform("Not inside R, Python or Bash code chunk.")
+        inform("Not inside supported code chunk.")
         return
     end
 
@@ -711,6 +713,7 @@ M.line = function(m)
                 canonical,
                 make_should_stop(lang_cfg.stop_types),
                 lang_cfg.wrap_inline or function(code) return code end,
+                lang_cfg.dedent or false,
                 m
             )
         else
