@@ -301,16 +301,16 @@ M.resolve_lang = function(lang)
     -- Direct match first (canonical name)
     if langs[lang] then return lang, langs[lang] end
 
-    if not M._alias_map then
-        M._alias_map = {}
-        for canonical, entry in pairs(langs) do
-            for _, alias in ipairs(entry.aliases or {}) do
-                M._alias_map[alias] = canonical
-            end
+    -- Build alias map on every call (tiny table, negligible cost)
+    -- This ensures runtime config changes are picked up immediately.
+    local alias_map = {}
+    for canonical, entry in pairs(langs) do
+        for _, alias in ipairs(entry.aliases or {}) do
+            alias_map[alias] = canonical
         end
     end
 
-    local canonical = M._alias_map[lang]
+    local canonical = alias_map[lang]
     if canonical then return canonical, langs[canonical] end
 
     return nil, nil
