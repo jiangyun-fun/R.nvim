@@ -428,4 +428,25 @@ M.get_mapped_key = function(name)
     return nil
 end
 
+M.dedent = function(text)
+    local lines = vim.split(text, "\n", { plain = true })
+
+    -- Find minimum leading whitespace among non-empty lines
+    local min_indent = math.huge
+    for _, line in ipairs(lines) do
+        if line:match("%S") then
+            min_indent = math.min(min_indent, #(line:match("^(%s*)")))
+        end
+    end
+
+    if min_indent == 0 or min_indent == math.huge then return text end
+
+    -- Remove min_indent leading spaces from each line
+    for i, line in ipairs(lines) do
+        lines[i] = line:sub(min_indent + 1)
+    end
+
+    return table.concat(lines, "\n")
+end
+
 return M

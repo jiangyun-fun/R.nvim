@@ -287,9 +287,34 @@ M.get_chunks_below_cursor = function(bufnr)
     return chunks_below
 end
 
---- This function gets the supported languages for code execution
----@return string[]
-M.get_supported_chunk_langs = function() return { "r", "webr", "python", "pyodide" } end
+--- Resolve a chunk language name to its canonical name and config entry.
+--- Aliases (e.g., "webr" → "r", "pyodide" → "python") are resolved.
+--- The canonical name must match a TreeSitter parser name.
+---@param lang string The chunk language name from the document
+---@return string|nil canonical_name
+---@return RChunkLangConfig|nil lang_config
+M.resolve_lang = function(lang)
+    local cfg = require("r.config").get_config()
+    local langs = cfg.chunk_langs
+    if not langs then return nil, nil end
+
+    -- Direct match first (canonical name)
+    if langs[lang] then return lang, langs[lang] end
+
+    -- Build alias map on every call (tiny table, negligible cost)
+    -- This ensures runtime config changes are picked up immediately.
+    local alias_map = {}
+    for canonical, entry in pairs(langs) do
+        for _, alias in ipairs(entry.aliases or {}) do
+            alias_map[alias] = canonical
+        end
+    end
+
+    local canonical = alias_map[lang]
+    if canonical then return canonical, langs[canonical] end
+
+    return nil, nil
+end
 
 --- This function filters the code chunks based on the supported languages
 ---@param chunks table The code chunks.
@@ -303,11 +328,9 @@ M.filter_supported_langs = function(chunks)
     end
 
     local supported_chunks = {}
-    local supported_langs = M.get_supported_chunk_langs()
     for _, chunk in ipairs(chunks) do
-        if vim.tbl_contains(supported_langs, chunk.lang) then
-            table.insert(supported_chunks, chunk)
-        end
+        local canonical, _ = M.resolve_lang(chunk.lang)
+        if canonical then table.insert(supported_chunks, chunk) end
     end
     return supported_chunks
 end
@@ -315,22 +338,17 @@ end
 --- This function checks if a language is supported
 ---@param lang string
 ---@return boolean
-M.is_supported_lang = function(lang) return M.is_r(lang) or M.is_python(lang) end
+M.is_supported_lang = function(lang)
+    local _, cfg = M.resolve_lang(lang)
+    return cfg ~= nil
+end
 
 --- This function checks if a language is either "r" or "webr"
 ---@param lang string
 ---@return boolean
 M.is_r = function(lang)
-    local r_langs = { r = true, webr = true }
-    return r_langs[lang] or false
-end
-
---- This function checks if a language is "python"
----@param lang string
----@return boolean
-M.is_python = function(lang)
-    local python_langs = { python = true, pyodide = true }
-    return python_langs[lang] or false
+    local name, _ = M.resolve_lang(lang)
+    return name == "r"
 end
 
 --- This function filters the code chunks based on the eval parameter. If the eval parameter is not found it is assumed to be true
@@ -365,22 +383,23 @@ M.filter_code_chunks_by_eval = function(chunks)
 end
 
 --- Formats the code chunks into a list of code lines that can be executed in
---- R. The code lines are formatted based on the language of the code chunk. If
---- the language is python, the code line is wrapped in
---- reticulate::py_run_string. If the language is R, the code line is returned
---- as is.
+--- R. The code lines are formatted based on the chunk_langs config for each
+--- language.
 ---@param chunks table The code chunks.
 ---@return table
 M.codelines_from_chunks = function(chunks)
+    local utils = require("r.utils")
     local codelines = {}
 
     for _, chunk in ipairs(chunks) do
         local lang = chunk:get_lang()
         local content = chunk:get_content()
-        if M.is_python(lang) then
-            content = 'reticulate::py_run_string(r"---(' .. content .. ')---")'
-        end
-        if M.is_python(lang) or M.is_r(lang) then
+        local _, lang_cfg = M.resolve_lang(lang)
+
+        if lang_cfg then
+            if lang_cfg.dedent then content = utils.dedent(content) end
+            local wrap_inline = lang_cfg.wrap_inline or function(code) return code end
+            content = wrap_inline(content)
             local lines = vim.fn.split(content, "\n")
             for _, v in pairs(lines) do
                 table.insert(codelines, v)

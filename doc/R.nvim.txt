@@ -981,6 +981,7 @@ You may close the window opened by `:RConfigShow` by simply pressing `q`.
 |view_df|             Options for visualizing a data.frame or matrix
 |R.nvim-SyncTeX|      Options for SyncTeX
 |debug|               Support for debugging functions
+|chunk_langs|         Configuration for code chunk languages
 
 
 ------------------------------------------------------------------------------
@@ -2511,6 +2512,56 @@ debug. You can hold the highlighted line in the middle of the window with
 >lua
     debug_center = true
 <
+
+------------------------------------------------------------------------------
+6.42. Code chunk languages                                         *chunk_langs*
+
+By default, R.nvim supports sending R, Python, and Bash code chunks from
+Quarto and R Markdown documents to R. You can add support for additional
+languages (e.g., Julia, Rust) or customise existing behaviour by adding
+entries to the `chunk_langs` table. Each entry is keyed by the canonical
+TreeSitter language name:
+
+>lua
+   chunk_langs = {
+     julia = {
+       aliases = { "jl" },
+       stop_types = { "source_file", "module" },
+       dedent = false,
+       wrap_inline = function(code)
+         return 'JuliaCall::julia_command(r"---(begin\n' .. code .. '\nend)---")'
+       end,
+       wrap_file = function(filepath)
+         return 'JuliaCall::julia_source("' .. filepath .. '")'
+       end,
+     },
+   },
+<
+Fields:
+
+   `aliases`       (string[])  Alternative names for the chunk language
+                               (e.g., `{ "webr" }` for R, `{ "pyodide" }` for
+                               Python). Used to match the info-string in
+                               fenced code blocks.
+
+   `stop_types`    (string[])  TreeSitter node types that signal "stop walking
+                               up the AST" when finding the enclosing
+                               expression. Used for multi-line code detection.
+
+   `dedent`        (boolean)   Whether to remove common leading indentation
+                               before sending the code.
+
+   `wrap_inline`   (function)  Function that wraps short code into an R
+                               command string. Receives the code and must
+                               return a string. Used when the code is short
+                               enough to paste directly.
+
+   `wrap_file`     (function)  Function that constructs an R command to source
+                               a temporary file. Receives the file path and
+                               must return a string. Used for longer code.
+                               Optional: if omitted, the default R sourcing
+                               mechanism is used.
+
 
 ==============================================================================
 7. Public Lua API                                             *R.nvim-lua-api*

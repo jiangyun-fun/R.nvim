@@ -54,6 +54,19 @@ local hooks = require("r.hooks")
 ---Highlight color of R output in hover and resolve windows
 ---@field rout_fg_colors? table
 
+---@class RChunkLangConfig
+---Alternative chunk language names (e.g., { "webr" } for "r")
+---@field aliases? string[]
+---TreeSitter parent node types that signal "stop walking up" when finding
+---the enclosing expression
+---@field stop_types? string[]
+---Whether to dedent code before wrapping
+---@field dedent? boolean
+---Function to wrap short code for inline sending to R
+---@field wrap_inline? fun(code: string): string
+---Function to construct an R command for sourcing a temp file
+---@field wrap_file? fun(filepath: string): string
+
 ---@class RConfigUserOpts
 ---
 ---Used to set R's `OutDec` option; see `?options` in R; do `:help OutDec` for
@@ -429,6 +442,11 @@ local hooks = require("r.hooks")
 ---to `60` seconds. Do `:help wait` for more information.
 ---@field wait? integer
 ---
+---Configuration for code chunk languages in Quarto/Rmd documents.
+---Keys are canonical (TreeSitter) language names. Users can add new
+---languages (e.g., Julia, Rust) by adding entries here.
+---@field chunk_langs? table<string, RChunkLangConfig>
+---
 ---Set `params` based on the YAML header for R Markdown and
 ---Quarto documents. Defaults to `"yes"`.
 ---@field set_params? '"no"' | '"no_override"' | '"yes"'
@@ -583,6 +601,39 @@ local config = {
     },
     wait = 60,
     set_params = "yes",
+    chunk_langs = {
+        r = {
+            aliases = { "webr" },
+            stop_types = { "program", "braced_expression" },
+            dedent = false,
+            wrap_inline = function(code) return code end,
+            wrap_file = function(filepath)
+                return 'Rnvim.source("' .. filepath .. '")'
+            end,
+        },
+        python = {
+            aliases = { "pyodide" },
+            stop_types = { "module", "block" },
+            dedent = true,
+            wrap_inline = function(code)
+                return 'reticulate::py_run_string(r"---(' .. code .. ')---")'
+            end,
+            wrap_file = function(filepath)
+                return 'reticulate::py_run_file("' .. filepath .. '")'
+            end,
+        },
+        bash = {
+            aliases = {},
+            stop_types = { "program", "compound_statement", "subshell" },
+            dedent = true,
+            wrap_inline = function(code)
+                return 'system2("bash", c("-c", shQuote(r"---(' .. code .. ')---")))'
+            end,
+            wrap_file = function(filepath)
+                return 'system2("bash", c(shQuote("' .. filepath .. '")))'
+            end,
+        },
+    },
 }
 
 local user_opts = {}
@@ -690,7 +741,10 @@ local apply_user_opts = function(opts)
         -- 1. Check the option exists
         -----------------------------------------------------------------------
         if default_val == nil then
-            if not key_name:find("r_ls.fun_data") then
+            if
+                not key_name:find("r_ls%.fun_data")
+                and not key_name:find("^chunk_langs%.")
+            then
                 swarn("Invalid option `" .. key_name .. "`.")
             end
             return
@@ -1099,15 +1153,17 @@ local global_setup = function()
     end
 
     -- Override default config values with user options for the second time.
-    for k, v in pairs(user_opts) do
-        if type(v) == "table" then
-            for k2, v2 in pairs(v) do
-                config[k][k2] = v2
+    -- Uses deep merge to correctly handle nested tables (e.g. chunk_langs.julia.stop_types).
+    local function deep_merge(target, source)
+        for k, v in pairs(source) do
+            if type(v) == "table" and type(target[k]) == "table" then
+                deep_merge(target[k], v)
+            else
+                target[k] = v
             end
-        else
-            config[k] = v
         end
     end
+    deep_merge(config, user_opts)
 
     require("r.commands").create_user_commands()
 
