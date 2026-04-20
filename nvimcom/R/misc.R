@@ -114,7 +114,7 @@ nvim_viewobj <- function(
             nrows <- ceiling(10000 / ncol(o))
         }
         if (nrows != 0 && nrows < nrow(o)) {
-            o <- o[1:nrows, ]
+            o <- o[seq_len(nrows), , drop = FALSE]
         }
         if (!is.null(R_df_viewer)) {
             cmd <- gsub("'", "\x13", R_df_viewer)
