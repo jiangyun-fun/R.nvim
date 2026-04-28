@@ -61,9 +61,7 @@ M.send_current_chunk = function(m)
     chunks = quarto.filter_supported_langs(chunks)
 
     if #chunks == 0 then
-        inform(
-            "No evaluable supported code chunk found at the current cursor position."
-        )
+        inform("No evaluable supported code chunk found at the current cursor position.")
 
         return
     end
@@ -232,32 +230,6 @@ augroup END
 ]])
 end
 
-local setup_yaml_hl = function()
-    vim.treesitter.query.set(
-        "r",
-        "highlights",
-        [[
-; extends
-; From quarto.nvim, YAML header for code blocks.
-((comment) @comment (#match? @comment "^\\#\\|")) @attribute
-; Cell delimiter for Jupyter
-((comment) @content (#match? @content "^\\# ?\\%\\%")) @string.special
-]]
-    )
-
-    vim.treesitter.query.set(
-        "python",
-        "highlights",
-        [[
-; extends
-; YAML header for code blocks
-((comment) @comment (#match? @comment "^\\#\\|")) @attribute
-; Cell delimiter for Jupyter
-((comment) @content (#match? @content "^\\# ?\\%\\%")) @class.outer @string.special
-]]
-    )
-end
-
 --- Setup function for initializing module functionality.
 -- This includes setting up buffer-specific key mappings, variables, and scheduling additional setup tasks.
 M.setup = function()
@@ -284,7 +256,7 @@ M.setup = function()
     if config.quarto_chunk_hl.yaml_hl == nil then
         config.quarto_chunk_hl.yaml_hl = true
     end
-    if config.quarto_chunk_hl.yaml_hl then setup_yaml_hl() end
+    if config.quarto_chunk_hl.yaml_hl then require("r.hl").yaml() end
 end
 
 --- Compiles the current R Markdown document into a specified output format.

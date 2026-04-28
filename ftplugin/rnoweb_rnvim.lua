@@ -11,6 +11,10 @@ require("r.config").real_setup()
 -- Key bindings
 require("r.maps").create("rnoweb")
 
+local config = require("r.config").get_config()
+
+if config.quarto_chunk_hl.yaml_hl then require("r.hl").yaml() end
+
 vim.schedule(function()
     require("r.pdf").setup()
     require("r.rnw").set_pdf_dir()
