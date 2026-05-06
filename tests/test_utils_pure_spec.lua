@@ -72,7 +72,7 @@ describe("utils.msg_join", function()
 
     it("uses custom quote character", function()
         assert.same(
-            "'a', and 'b'",
+            "'a' and 'b'",
             utils.msg_join({ "a", "b" }, ", ", " and ", "'")
         )
     end)
