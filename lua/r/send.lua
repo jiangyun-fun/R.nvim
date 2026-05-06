@@ -250,6 +250,7 @@ local function send_chunk_line(
     stop_fn,
     wrap_fn,
     should_dedent,
+    wrap_file_fn,
     m
 )
     local lines
@@ -259,7 +260,7 @@ local function send_chunk_line(
     local ok
 
     if #lines > 1 then
-        ok = M.source_lines(lines, nil, { dedent = should_dedent, wrap_inline = wrap_fn })
+        ok = M.source_lines(lines, nil, { dedent = should_dedent, wrap_inline = wrap_fn, wrap_file = wrap_file_fn })
     else
         local code = lines[1] or ""
         if should_dedent then code = utils.dedent(code) end
@@ -758,6 +759,7 @@ M.line = function(m)
                 make_should_stop(lang_cfg.stop_types),
                 lang_cfg.wrap_inline or function(code) return code end,
                 lang_cfg.dedent or false,
+                lang_cfg.wrap_file,
                 m
             )
         else
