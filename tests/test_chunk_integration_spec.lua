@@ -4,16 +4,26 @@ local chunk = require("r.chunk")
 local send = require("r.send")
 local config = require("r.config").get_config()
 
--- Helper: create a minimal Chunk object for testing
-local function make_chunk(lang, content, eval_val)
-    local info_params = {}
-    if eval_val ~= nil then info_params.eval = eval_val end
-    return chunk.Chunk:new(content, 1, 10, info_params, {}, lang, nil)
+-- Helper: create a mock Chunk with the required methods
+local function make_chunk(lang, content, eval_info, eval_comment)
+    return {
+        content = content,
+        lang = lang,
+        info_string_params = eval_info and { eval = eval_info } or {},
+        comment_params = eval_comment and { eval = eval_comment } or {},
+        get_lang = function(self) return self.lang end,
+        get_content = function(self) return self.content end,
+        get_info_string_params = function(self) return self.info_string_params end,
+        get_comment_params = function(self) return self.comment_params end,
+        get_child_param = function(self)
+            return self.comment_params.child or self.info_string_params.child
+        end,
+    }
 end
 
 describe("filter_code_chunks_by_eval", function()
     it("includes chunks with no eval param", function()
-        local c = make_chunk("r", "x <- 1", nil)
+        local c = make_chunk("r", "x <- 1")
         local filtered = chunk.filter_code_chunks_by_eval({ c })
         assert.same(1, #filtered)
     end)
@@ -24,21 +34,20 @@ describe("filter_code_chunks_by_eval", function()
         assert.same(1, #filtered)
     end)
 
-    it("excludes chunks with eval=FALSE", function()
+    it("excludes chunks with eval=FALSE in info_string", function()
         local c = make_chunk("r", "x <- 1", "FALSE")
         local filtered = chunk.filter_code_chunks_by_eval({ c })
         assert.same(0, #filtered)
     end)
 
-    it("excludes chunks with eval=false (lowercase from comment params)", function()
-        -- comment_params.eval uses "false" (lowercase) check
-        local c = chunk.Chunk:new("x <- 1", 1, 10, {}, { eval = "false" }, "r", nil)
+    it("excludes chunks with eval=false in comment params", function()
+        local c = make_chunk("r", "x <- 1", nil, "false")
         local filtered = chunk.filter_code_chunks_by_eval({ c })
         assert.same(0, #filtered)
     end)
 
     it("filters mixed chunks correctly", function()
-        local c1 = make_chunk("r", "x <- 1", nil)
+        local c1 = make_chunk("r", "x <- 1")
         local c2 = make_chunk("r", "y <- 2", "FALSE")
         local c3 = make_chunk("r", "z <- 3", "TRUE")
         local filtered = chunk.filter_code_chunks_by_eval({ c1, c2, c3 })
@@ -52,22 +61,10 @@ describe("filter_code_chunks_by_eval", function()
 end)
 
 describe("codelines_from_chunks", function()
-    local orig_chunk_langs
-
-    before_each(function()
-        -- Ensure chunk_langs is available
-        orig_chunk_langs = config.chunk_langs
-    end)
-
-    after_each(function()
-        config.chunk_langs = orig_chunk_langs
-    end)
-
     it("wraps bash chunk content with wrap_inline", function()
-        local c = make_chunk("bash", "echo hello", nil)
+        local c = make_chunk("bash", "echo hello")
         local lines = chunk.codelines_from_chunks({ c })
         assert.truthy(#lines >= 1)
-        -- bash wrap_inline should produce system2("bash", ...)
         assert.truthy(
             lines[1]:match('system2%("bash"'),
             "Expected bash wrapping, got: " .. tostring(lines[1])
@@ -75,10 +72,8 @@ describe("codelines_from_chunks", function()
     end)
 
     it("dedents bash code when dedent is true", function()
-        -- Bash config has dedent=true, so indented code should be dedented
-        local c = make_chunk("bash", "  echo hello\n  echo world", nil)
+        local c = make_chunk("bash", "  echo hello\n  echo world")
         local lines = chunk.codelines_from_chunks({ c })
-        -- After dedent + wrap_inline, should not have leading spaces in the code part
         assert.truthy(
             lines[1]:match('system2%("bash"'),
             "Expected bash wrapping for dedented code"
@@ -86,14 +81,14 @@ describe("codelines_from_chunks", function()
     end)
 
     it("returns empty for unknown language", function()
-        local c = make_chunk("javascript", "console.log('hi')", nil)
+        local c = make_chunk("javascript", "console.log('hi')")
         local lines = chunk.codelines_from_chunks({ c })
         assert.same({}, lines)
     end)
 
     it("handles multiple chunks of different languages", function()
-        local c_r = make_chunk("r", "x <- 1", nil)
-        local c_bash = make_chunk("bash", "echo hello", nil)
+        local c_r = make_chunk("r", "x <- 1")
+        local c_bash = make_chunk("bash", "echo hello")
         local lines = chunk.codelines_from_chunks({ c_r, c_bash })
         assert.truthy(#lines >= 2, "Should have lines from both chunks")
     end)
