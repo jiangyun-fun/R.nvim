@@ -1,0 +1,31 @@
+---
+title: "Cursor Motion"
+---
+
+# First section
+
+```{r}
+#| label: chunk_one
+x <- 1
+y <- 2
+```
+
+Some markdown text.
+
+```{r, eval=FALSE}
+#| label: chunk_two_no_eval
+z <- 3
+```
+
+```{bash}
+echo "hello"
+```
+
+## Second section
+
+```{r}
+#| label: chunk_three
+a <- 10
+b <- 20
+c <- 30
+```
