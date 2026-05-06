@@ -1,0 +1,68 @@
+---
+title: "Send Chunks"
+---
+
+# Short bash chunk
+
+```{bash}
+echo "Hello from bash!"
+```
+
+# Long bash chunk (exceeds max_paste_lines=20)
+
+```{bash}
+if true; then
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+  ls > /dev/null
+fi
+```
+
+# Short R chunk
+
+```{r}
+x <- 1L:10L
+```
+
+# Long R chunk (exceeds max_paste_lines=20)
+
+```{r}
+x <- 1
+y <- 2
+z <- 3
+a <- 4
+b <- 5
+c <- 6
+d <- 7
+e <- 8
+f <- 9
+g <- 10
+h <- 11
+i <- 12
+j <- 13
+k <- 14
+l <- 15
+m <- 16
+n <- 17
+o <- 18
+p <- 19
+q <- 20
+r <- 21
+```

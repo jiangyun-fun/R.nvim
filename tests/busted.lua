@@ -20,6 +20,7 @@ require("lazy.minit").busted({
             lazy = false,
             opts = {
                 ensure_installed = {
+                    "bash",
                     "markdown",
                     "markdown_inline",
                     "r",
