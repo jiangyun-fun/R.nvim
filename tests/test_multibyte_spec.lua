@@ -79,7 +79,7 @@ describe("source_lines handles multi-byte characters", function()
         }
         send.source_lines(lines, nil, lang_cfg)
         assert.truthy(
-            captured_cmd:match('system2%(\"bash\"'),
+            captured_cmd:match('system2%("bash"'),
             "Expected system2 wrap_file for long bash with emoji, got: " .. tostring(captured_cmd)
         )
     end)
