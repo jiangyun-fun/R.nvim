@@ -17,11 +17,11 @@ local test_utils = require("./utils")
 -- 12: (blank)
 -- 13: Some markdown text.
 -- 14: (blank)
--- 15: ```{r, eval=FALSE}   <- chunk_two header  (start_row=15, eval=false)
+-- 15: ```{r, eval=FALSE}   <- chunk_two header  (start_row=15, eval=false, FILTERED)
 -- 16: z <- 3
 -- 17: ```                   <- chunk_two end     (end_row=17)
 -- 18: (blank)
--- 19: ```{bash}             <- bash chunk header (start_row=19)
+-- 19: ```{bash}             <- bash chunk header (start_row=19, SUPPORTED)
 -- 20: echo "hello"
 -- 21: ```                   <- bash chunk end    (end_row=21)
 -- 22: (blank)
@@ -34,6 +34,9 @@ local test_utils = require("./utils")
 -- 29: c <- 30
 -- 30: ```                   <- chunk_three end   (end_row=30)
 -- 31: (blank)
+--
+-- Supported chunks (eval'd + supported lang): chunk_one (R), bash, chunk_three (R)
+-- chunk_two is filtered out (eval=FALSE). bash IS supported.
 
 local function get_cursor()
     return { vim.api.nvim_win_get_cursor(0)[1], vim.api.nvim_win_get_cursor(0)[2] }
@@ -51,22 +54,25 @@ describe("next_chunk cursor movement", function()
         vim.api.nvim_set_current_buf(bufnr)
     end)
 
-    it("from markdown text lands on next chunk body (start_row+1)", function()
+    it("from markdown text lands on next supported chunk body", function()
         vim.api.nvim_win_set_cursor(0, { 13, 0 }) -- "Some markdown text."
         rmd.next_chunk()
-        assert.same({ 25, 0 }, get_cursor()) -- chunk_three body (skips eval=false + bash)
+        -- Next supported+eval chunk is bash (start_row=19); not on header → start_row+1=20
+        assert.same({ 20, 0 }, get_cursor())
     end)
 
     it("from chunk header lands on next chunk header (start_row)", function()
         vim.api.nvim_win_set_cursor(0, { 7, 0 }) -- chunk_one header
         rmd.next_chunk()
-        assert.same({ 25, 0 }, get_cursor()) -- chunk_three header (skips eval=false + bash)
+        -- On header → next chunk's start_row = bash header at 19
+        assert.same({ 19, 0 }, get_cursor())
     end)
 
     it("from chunk body lands on next chunk body (start_row+1)", function()
         vim.api.nvim_win_set_cursor(0, { 9, 0 }) -- inside chunk_one body
         rmd.next_chunk()
-        assert.same({ 26, 0 }, get_cursor()) -- chunk_three body start (line after header)
+        -- Not on header → next chunk's start_row+1 = bash body at 20
+        assert.same({ 20, 0 }, get_cursor())
     end)
 
     it("from chunk end line stays still (no next chunk)", function()
@@ -76,18 +82,18 @@ describe("next_chunk cursor movement", function()
         assert.same({ 30, 0 }, get_cursor())
     end)
 
-    it("from bash chunk body skips to next R chunk", function()
+    it("from bash chunk body goes to next chunk body", function()
         vim.api.nvim_win_set_cursor(0, { 20, 0 }) -- inside bash chunk
         rmd.next_chunk()
-        assert.same({ 26, 0 }, get_cursor()) -- chunk_three body
+        -- Next is chunk_three (start_row=25); not on header → 26
+        assert.same({ 26, 0 }, get_cursor())
     end)
 
-    it("skips eval=FALSE chunks", function()
+    it("from before first chunk goes to first chunk body", function()
         vim.api.nvim_win_set_cursor(0, { 6, 0 }) -- before chunk_one
         rmd.next_chunk()
-        -- First supported+eval chunk is chunk_one at row 7
-        -- Since cursor is NOT on chunk_one's header, goes to start_row+1
-        assert.same({ 8, 0 }, get_cursor()) -- chunk_one body
+        -- First supported+eval chunk is chunk_one (start_row=7); not on header → 8
+        assert.same({ 8, 0 }, get_cursor())
     end)
 
     it("from chunk_three body finds no further chunk", function()
@@ -109,12 +115,11 @@ describe("previous_chunk cursor movement", function()
         vim.api.nvim_set_current_buf(bufnr)
     end)
 
-    it("from chunk_three body goes to chunk_one body", function()
+    it("from chunk_three body goes to bash body", function()
         vim.api.nvim_win_set_cursor(0, { 27, 0 }) -- inside chunk_three
         rmd.previous_chunk()
-        -- Previous eval'd supported chunk is chunk_one
-        -- go_to_previous sets cursor to prev_chunk.start_row + 1
-        assert.same({ 8, 0 }, get_cursor())
+        -- Previous eval'd supported chunk is bash (start_row=19); start_row+1=20
+        assert.same({ 20, 0 }, get_cursor())
     end)
 
     it("from chunk_one body finds no previous chunk", function()
@@ -127,13 +132,15 @@ describe("previous_chunk cursor movement", function()
     it("from bash chunk body goes to chunk_one body", function()
         vim.api.nvim_win_set_cursor(0, { 20, 0 }) -- inside bash chunk
         rmd.previous_chunk()
-        assert.same({ 8, 0 }, get_cursor()) -- chunk_one body
+        -- Previous is chunk_one (start_row=7); start_row+1=8
+        assert.same({ 8, 0 }, get_cursor())
     end)
 
-    it("from markdown text goes to chunk_one body", function()
+    it("from markdown text goes to bash body", function()
         vim.api.nvim_win_set_cursor(0, { 23, 0 }) -- "## Second section"
         rmd.previous_chunk()
-        assert.same({ 8, 0 }, get_cursor()) -- chunk_one body
+        -- Previous eval'd supported chunk is bash (start_row=19); start_row+1=20
+        assert.same({ 20, 0 }, get_cursor())
     end)
 end)
 
@@ -190,11 +197,11 @@ describe("move_next_line cursor movement", function()
         vim.api.nvim_set_current_buf(bufnr)
     end)
 
-    it("skips blank lines to next content", function()
+    it("detects chunk end fence and calls next_chunk", function()
         vim.api.nvim_win_set_cursor(0, { 11, 0 }) -- chunk_one end ```
         cursor.move_next_line()
-        -- Should skip blank line 12, land on "Some markdown text." at line 13
-        assert.same({ 13, 0 }, get_cursor())
+        -- ``` is detected as chunk end fence → next_chunk() → bash body at 20
+        assert.same({ 20, 0 }, get_cursor())
     end)
 
     it("lands on next line when no blank in between", function()
@@ -209,12 +216,11 @@ describe("move_next_line cursor movement", function()
         assert.same({ 31, 0 }, get_cursor()) -- no movement
     end)
 
-    it("triggers next_chunk when on chunk end fence", function()
+    it("detects chunk end fence on eval=false chunk end", function()
         vim.api.nvim_win_set_cursor(0, { 17, 0 }) -- chunk_two end ```
-        -- move_next_line should detect the ``` fence and call rmd.next_chunk()
-        -- which goes to chunk_three body (skips bash)
+        -- move_next_line detects ``` fence → next_chunk() → bash body at 20
         cursor.move_next_line()
-        assert.same({ 26, 0 }, get_cursor()) -- chunk_three body
+        assert.same({ 20, 0 }, get_cursor())
     end)
 end)
 
@@ -291,8 +297,8 @@ describe("send.line cursor after sending with move mode", function()
     it("on chunk end ``` moves to next chunk with move mode", function()
         vim.api.nvim_win_set_cursor(0, { 11, 0 }) -- chunk_one end ```
         send.line("move")
-        -- chunk_end + move -> next_chunk -> chunk_three body (skips eval=false + bash)
-        assert.same({ 26, 0 }, get_cursor())
+        -- chunk_end + move -> next_chunk() -> bash body (20)
+        assert.same({ 20, 0 }, get_cursor())
     end)
 
     it("on chunk end ``` stays with stay mode", function()
@@ -304,9 +310,9 @@ describe("send.line cursor after sending with move mode", function()
     it("on chunk header sends whole chunk and moves", function()
         vim.api.nvim_win_set_cursor(0, { 7, 0 }) -- chunk_one header ```{r}
         send.line("move")
-        -- chunk_header -> rmd.send_current_chunk(true) -> next_chunk
-        -- After sending chunk_one, next_chunk goes to chunk_three
-        assert.same({ 25, 0 }, get_cursor()) -- chunk_three header (was on header)
+        -- chunk_header -> send_current_chunk(true) -> next_chunk()
+        -- After sending chunk_one, next_chunk → bash header (was on header → start_row)
+        assert.same({ 19, 0 }, get_cursor()) -- bash header
     end)
 
     it("on chunk header stays with stay mode", function()
