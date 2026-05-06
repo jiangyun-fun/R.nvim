@@ -65,12 +65,15 @@ describe("utils.msg_join", function()
 
     it("uses custom separators", function()
         assert.same(
-            "'a' + 'b' + 'c'",
+            '"a" + "b" + "c"',
             utils.msg_join({ "a", "b", "c" }, " + ", " + ")
         )
     end)
 
     it("uses custom quote character", function()
-        assert.same("`a`, `b`", utils.msg_join({ "a", "b" }, ", ", " and ", "`"))
+        assert.same(
+            "'a', and 'b'",
+            utils.msg_join({ "a", "b" }, ", ", " and ", "'")
+        )
     end)
 end)
