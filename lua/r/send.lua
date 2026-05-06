@@ -260,7 +260,11 @@ local function send_chunk_line(
     local ok
 
     if #lines > 1 then
-        ok = M.source_lines(lines, nil, { dedent = should_dedent, wrap_inline = wrap_fn, wrap_file = wrap_file_fn })
+        ok = M.source_lines(lines, nil, {
+            dedent = should_dedent,
+            wrap_inline = wrap_fn,
+            wrap_file = wrap_file_fn,
+        }, lang)
     else
         local code = lines[1] or ""
         if should_dedent then code = utils.dedent(code) end
@@ -339,8 +343,9 @@ end
 ---@param lines string[] Lines to save and source
 ---@param what string|nil Additional operation to perform
 ---@param lang_cfg RChunkLangConfig|nil Language config for wrapping
+---@param lang string|nil Language for which the code should be wrapped
 ---@return boolean
-M.source_lines = function(lines, what, lang_cfg)
+M.source_lines = function(lines, what, lang_cfg, lang)
     require("r.edit").add_for_deletion(config.source_file)
 
     local rcmd
@@ -354,7 +359,7 @@ M.source_lines = function(lines, what, lang_cfg)
         end
     else
         vim.fn.writefile(lines, config.source_file)
-        if lang_cfg and lang_cfg.wrap_file then
+        if lang_cfg and lang_cfg.wrap_file and lang ~= "r" then
             rcmd = lang_cfg.wrap_file(config.source_file)
         elseif what then
             local sargs = string.gsub(M.get_source_args(), "^, ", "")
