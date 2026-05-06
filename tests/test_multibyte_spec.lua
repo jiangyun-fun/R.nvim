@@ -1,7 +1,7 @@
 local assert = require("luassert")
+local stub = require("luassert.stub")
 local send = require("r.send")
 local config = require("r.config").get_config()
-local test_utils = require("./utils")
 
 describe("source_lines handles multi-byte characters", function()
     local captured_cmd
@@ -52,7 +52,7 @@ describe("source_lines handles multi-byte characters", function()
 
     it("preserves Chinese characters in file-sourced code", function()
         local lines = {}
-        for i = 1, 21 do
+        for _ = 1, 21 do
             table.insert(lines, 'x <- "你好"')
         end
         send.source_lines(lines, nil, nil)
@@ -65,8 +65,8 @@ describe("source_lines handles multi-byte characters", function()
 
     it("preserves emoji in file-sourced code with wrap_file", function()
         local lines = {}
-        for i = 1, 21 do
-            table.insert(lines, 'echo "👋"')
+        for _ = 1, 21 do
+            table.insert(lines, "echo '👋'")
         end
         local lang_cfg = {
             dedent = true,

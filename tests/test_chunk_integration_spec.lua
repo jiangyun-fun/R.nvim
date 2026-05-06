@@ -163,8 +163,8 @@ describe("send.source_lines with dedent", function()
     it("applies source_args in Rnvim.source command", function()
         config.source_args = "echo=TRUE"
         local lines = {}
-        for i = 1, 21 do
-            table.insert(lines, "x <- " .. i)
+        for _ = 1, 21 do
+            table.insert(lines, "x <- 1")
         end
         send.source_lines(lines, nil, nil)
         assert.truthy(
@@ -176,8 +176,8 @@ describe("send.source_lines with dedent", function()
     it("applies source_args in Rnvim.chunk command", function()
         config.source_args = "echo=TRUE"
         local lines = {}
-        for i = 1, 21 do
-            table.insert(lines, "x <- " .. i)
+        for _ = 1, 21 do
+            table.insert(lines, "x <- 1")
         end
         send.source_lines(lines, "chunk", nil)
         assert.truthy(
