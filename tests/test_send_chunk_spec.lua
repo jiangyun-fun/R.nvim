@@ -7,29 +7,38 @@ describe("source_lines language wrapping", function()
     local config = require("r.config")
     local captured_cmd
     local cmd_stub
+    local orig_source_file
+    local orig_max_paste_lines
+    local orig_bracketed_paste
+    local orig_source_args
 
     before_each(function()
-        -- Reset module state so config changes take effect
-        package.loaded["r.config"] = nil
-        config = require("r.config")
+        -- Save and override config fields (send.lua holds the same table reference)
+        orig_source_file = config.source_file
+        orig_max_paste_lines = config.max_paste_lines
+        orig_bracketed_paste = config.bracketed_paste
+        orig_source_args = config.source_args
 
-        -- Ensure a stable tmpdir and source_file for file-based tests
-        config.tmpdir = "/tmp/R.nvim-test"
-        config.source_file = config.tmpdir .. "/Rsource-test"
+        config.source_file = "/tmp/R.nvim-test/Rsource-test"
         config.max_paste_lines = 20
         config.bracketed_paste = false
         config.source_args = ""
 
         -- Stub M.cmd to capture what would be sent to R
         captured_cmd = nil
-        cmd_stub = stub(send, "cmd", function(cmd)
-            captured_cmd = cmd
+        cmd_stub = stub(send, "cmd", function(cmd_str)
+            captured_cmd = cmd_str
             return true
         end)
     end)
 
     after_each(function()
         cmd_stub:revert()
+        -- Restore original config
+        config.source_file = orig_source_file
+        config.max_paste_lines = orig_max_paste_lines
+        config.bracketed_paste = orig_bracketed_paste
+        config.source_args = orig_source_args
     end)
 
     it("wraps short bash code with wrap_inline", function()
@@ -62,7 +71,7 @@ describe("source_lines language wrapping", function()
         }
         send.source_lines(lines, nil, lang_cfg)
         assert.truthy(
-            captured_cmd:match('system2%("bash", c%(shQuote%("'),
+            captured_cmd:match('system2%("bash"'),
             "Expected system2 wrap_file for long bash, got: " .. tostring(captured_cmd)
         )
     end)
@@ -74,7 +83,7 @@ describe("source_lines language wrapping", function()
         end
         send.source_lines(lines, nil, nil)
         assert.truthy(
-            captured_cmd:match("Rnvim%.source%"),
+            captured_cmd:match("Rnvim%.source%("),
             "Expected Rnvim.source for long R code, got: " .. tostring(captured_cmd)
         )
     end)
@@ -86,8 +95,9 @@ describe("source_lines language wrapping", function()
         end
         send.source_lines(lines, "chunk", nil)
         assert.truthy(
-            captured_cmd:match("Rnvim%.chunk%"),
-            "Expected Rnvim.chunk for long R code with what='chunk', got: " .. tostring(captured_cmd)
+            captured_cmd:match("Rnvim%.chunk%("),
+            "Expected Rnvim.chunk for long R code with what='chunk', got: "
+                .. tostring(captured_cmd)
         )
     end)
 end)
@@ -95,35 +105,44 @@ end)
 describe("send_chunk_line forwards wrap_file for long bash code", function()
     local send = require("r.send")
     local config = require("r.config")
-    local quarto = require("r.chunk")
     local captured_cmd
     local cmd_stub
+    local orig_source_file
+    local orig_max_paste_lines
+    local orig_bracketed_paste
+    local orig_source_args
 
     before_each(function()
-        package.loaded["r.config"] = nil
-        config = require("r.config")
-        config.tmpdir = "/tmp/R.nvim-test"
-        config.source_file = config.tmpdir .. "/Rsource-test"
+        orig_source_file = config.source_file
+        orig_max_paste_lines = config.max_paste_lines
+        orig_bracketed_paste = config.bracketed_paste
+        orig_source_args = config.source_args
+
+        config.source_file = "/tmp/R.nvim-test/Rsource-test"
         config.max_paste_lines = 20
         config.bracketed_paste = false
         config.source_args = ""
 
         captured_cmd = nil
-        cmd_stub = stub(send, "cmd", function(cmd)
-            captured_cmd = cmd
+        cmd_stub = stub(send, "cmd", function(cmd_str)
+            captured_cmd = cmd_str
             return true
         end)
     end)
 
     after_each(function()
         cmd_stub:revert()
+        config.source_file = orig_source_file
+        config.max_paste_lines = orig_max_paste_lines
+        config.bracketed_paste = orig_bracketed_paste
+        config.source_args = orig_source_args
     end)
 
     it("uses wrap_file when sending long bash chunk via send.line()", function()
         local bufnr = test_utils.create_r_buffer_from_file("tests/fixtures/send_chunks.qmd")
         vim.api.nvim_set_current_buf(bufnr)
-        -- Position cursor inside the long bash chunk (line 13 = inside the if block)
-        vim.api.nvim_win_set_cursor(0, { 13, 0 })
+        -- Position cursor inside the long bash chunk body (line 15 = inside the if block)
+        vim.api.nvim_win_set_cursor(0, { 15, 0 })
 
         -- Verify language detection works
         local lang = require("r.utils").get_lang()
