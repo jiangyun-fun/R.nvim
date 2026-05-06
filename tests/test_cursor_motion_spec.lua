@@ -212,9 +212,9 @@ describe("move_next_line cursor movement", function()
     end)
 
     it("stays on last line if already at end", function()
-        vim.api.nvim_win_set_cursor(0, { 32, 0 }) -- last line (blank)
+        vim.api.nvim_win_set_cursor(0, { 31, 0 }) -- last line (chunk_three end ```)
         cursor.move_next_line()
-        assert.same({ 32, 0 }, get_cursor()) -- no movement
+        assert.same({ 31, 0 }, get_cursor()) -- no movement
     end)
 
     it("detects chunk end fence on eval=false chunk end", function()
