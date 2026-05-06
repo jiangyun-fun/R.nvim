@@ -4,7 +4,7 @@ local test_utils = require("./utils")
 
 describe("source_lines language wrapping", function()
     local send = require("r.send")
-    local config = require("r.config")
+    local config = require("r.config").get_config()
     local captured_cmd
     local cmd_stub
     local orig_source_file
@@ -104,7 +104,7 @@ end)
 
 describe("send_chunk_line forwards wrap_file for long bash code", function()
     local send = require("r.send")
-    local config = require("r.config")
+    local config = require("r.config").get_config()
     local captured_cmd
     local cmd_stub
     local orig_source_file
