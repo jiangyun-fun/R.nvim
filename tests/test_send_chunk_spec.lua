@@ -20,6 +20,7 @@ describe("source_lines language wrapping", function()
         orig_source_args = config.source_args
 
         config.source_file = "/tmp/R.nvim-test/Rsource-test"
+        vim.fn.mkdir("/tmp/R.nvim-test", "p")
         config.max_paste_lines = 20
         config.bracketed_paste = false
         config.source_args = ""
@@ -119,6 +120,7 @@ describe("send_chunk_line forwards wrap_file for long bash code", function()
         orig_source_args = config.source_args
 
         config.source_file = "/tmp/R.nvim-test/Rsource-test"
+        vim.fn.mkdir("/tmp/R.nvim-test", "p")
         config.max_paste_lines = 20
         config.bracketed_paste = false
         config.source_args = ""
